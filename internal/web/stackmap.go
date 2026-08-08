@@ -173,17 +173,25 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(pins) > 0 {
+		// ViableOptions gives the exact releases that can appear in a complete stack
+		// with the pin. Keep them per node: a line can hold five builds while only two
+		// of them work with the selected vCenter, and reporting the line total there
+		// would overstate what is actually supported.
 		lit := map[string]bool{}
+		viable := map[string][]*graph.Release{}
 		for pid, rels := range g.ViableOptions(pins, graph.StackOptions{IncludePatches: true}) {
 			p, _ := model.ByID(pid)
 			if p.Key == "esx" {
 				continue
 			}
 			for _, rel := range rels {
-				lit[p.Key+":"+lineKey(p, rel)] = true
+				id := p.Key + ":" + lineKey(p, rel)
+				lit[id] = true
+				viable[id] = append(viable[id], rel)
 			}
 		}
 		resp["lit"] = keysOf(lit)
+		narrowNodes(layers, viable)
 		resp["edges"] = adjacentEdges(g, pins, order, layers, lit, nodeReleases)
 
 		// The exact hosts for the pinned vCenter, so the base node can state them.
@@ -199,6 +207,35 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// narrowNodes rewrites each lit node to hold only the releases that work with the
+// current pin, so a build count never claims more support than the matrix gives.
+func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release) {
+	for li := range layers {
+		for ni := range layers[li].Nodes {
+			node := &layers[li].Nodes[ni]
+			rels, ok := viable[node.ID]
+			if !ok {
+				continue // not lit; leave the unfiltered view for context
+			}
+			total := len(node.Releases)
+			node.Releases = node.Releases[:0]
+			for _, r := range rels {
+				node.Releases = append(node.Releases, r.Raw)
+			}
+			switch {
+			case layers[li].Key == "vcenter":
+				// vCenter nodes are single releases and keep their ESX annotation.
+			case len(node.Releases) < total:
+				node.Detail = fmt.Sprintf("%d of %d builds", len(node.Releases), total)
+			case len(node.Releases) > 1:
+				node.Detail = fmt.Sprintf("%d builds", len(node.Releases))
+			default:
+				node.Detail = ""
+			}
+		}
+	}
 }
 
 // adjacentEdges finds the connections to draw between neighbouring layers.

@@ -35,8 +35,15 @@ func testGraph(t *testing.T) *graph.Graph {
 	}
 	add(21, vc, "9.0.0.0")
 	add(11, esx, "9.0.0.0")
+	// A second base, so a Supervisor build can exist on the 1.33 line without being
+	// compatible with the 9.0.0.0 vCenter.
+	add(22, vc, "8.0U3")
+	add(12, esx, "8.0U3")
 	// Deliberately awkward: "+" and a parenthetical, both of which have bitten before.
 	add(31, sup, "v1.33.0+vmware.1-fips-vsc9.0.0.0")
+	// Same Kubernetes minor and train as 31, but only 31 works with the vCenter below.
+	// The node covering this line must report one build, not two.
+	add(32, sup, "v1.33.0+vmware.1-fips-vsc9.0.0.0100")
 	add(41, vks, "3.7.0+v1.36")
 	add(51, vkr, "1.36.1 (TKr 1.36.1 for vSphere 9.x)")
 
@@ -63,6 +70,13 @@ func testGraph(t *testing.T) *graph.Graph {
 	ok(21, 51)
 	ok(31, 41)
 	ok(41, 51)
+	// The 8.0U3 base carries the other 1.33 build, and only that one.
+	ok(12, 22)
+	ok(22, 32)
+	ok(12, 32)
+	ok(22, 41)
+	ok(22, 51)
+	ok(32, 41)
 
 	g, err := graph.Load(snap, graph.Options{})
 	if err != nil {
@@ -451,5 +465,47 @@ func TestStackMapHasNoEdgesWithoutAPin(t *testing.T) {
 	body := get(t, testServer(t), "/api/stackmap")
 	if edges, present := body["edges"]; present && edges != nil {
 		t.Errorf("expected no edges before a selection, got %v", edges)
+	}
+}
+
+// A node's build count has to describe what works with the current selection. Reporting
+// the whole line would claim support the matrix does not give: a Supervisor line can
+// hold several builds while a given vCenter patch takes only some of them.
+func TestStackMapNarrowsBuildCountsToThePin(t *testing.T) {
+	h := testServer(t)
+
+	unpinned := get(t, h, "/api/stackmap")
+	supLine := func(body map[string]any) map[string]any {
+		for _, l := range body["layers"].([]any) {
+			layer := l.(map[string]any)
+			if layer["key"] != "supervisor" {
+				continue
+			}
+			for _, n := range layer["nodes"].([]any) {
+				node := n.(map[string]any)
+				if node["label"] == "1.33" {
+					return node
+				}
+			}
+		}
+		t.Fatal("no Supervisor 1.33 node")
+		return nil
+	}
+
+	before := supLine(unpinned)
+	if got := len(before["releases"].([]any)); got != 2 {
+		t.Fatalf("fixture should give the 1.33 line 2 builds, got %d", got)
+	}
+
+	after := supLine(get(t, h, "/api/stackmap?product=vcenter&version=9.0.0.0"))
+	releases := after["releases"].([]any)
+	if len(releases) != 1 {
+		t.Errorf("with a pin the node should list only the compatible build, got %v", releases)
+	}
+	if releases[0].(string) != "v1.33.0+vmware.1-fips-vsc9.0.0.0" {
+		t.Errorf("wrong build survived the pin: %v", releases[0])
+	}
+	if detail, _ := after["detail"].(string); detail != "1 of 2 builds" {
+		t.Errorf("detail = %q, want \"1 of 2 builds\" so the narrowing is visible", detail)
 	}
 }

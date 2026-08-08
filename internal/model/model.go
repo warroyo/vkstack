@@ -36,6 +36,11 @@ type Product struct {
 	K8sMinorRun int
 	// UpgradeOrder is the position of this product in a stack upgrade, lowest first.
 	UpgradeOrder int
+	// Trains names the concurrent release trains a product ships, where it ships more
+	// than one at the same version. Empty for products with a single line.
+	Trains []string
+	// TrainNote explains what the trains mean, shown wherever they are.
+	TrainNote string
 }
 
 // Products are the five components in scope, in diagram order.
@@ -57,6 +62,9 @@ var Products = []Product{
 		Key: "supervisor", ID: 1378, Name: "VMware vSphere Supervisor", Label: "Supervisor",
 		Scheme: SchemeGeneric, Example: "v1.32.9+vmware.2-fips-vsc9.1.0.0200",
 		K8sMinorRun: 0, UpgradeOrder: 3,
+		Trains: []string{"vsc9", "vsc0"},
+		TrainNote: "vsc9.x ships with vCenter 9.x; vsc0.x is versioned independently. " +
+			"The same Kubernetes version exists on both and they are not interchangeable.",
 	},
 	{
 		Key: "vks", ID: 1794, Name: "vSphere Kubernetes Service", Label: "VKS",
@@ -68,6 +76,36 @@ var Products = []Product{
 		Scheme: SchemeGeneric, Example: "1.36.1",
 		K8sMinorRun: 0, UpgradeOrder: 5,
 	},
+}
+
+// Evidence records how a relationship is known, so the explainer can never present an
+// asserted rule and a published fact as though they carry the same weight.
+type Evidence string
+
+const (
+	// EvidencePublished: the interop matrix carries this pair directly. Highest
+	// confidence — every claim is a lookup.
+	EvidencePublished Evidence = "published"
+	// EvidenceInferred: upstream publishes nothing for this pair. The relationship is
+	// real, but any answer has to be derived through products that are published.
+	EvidenceInferred Evidence = "inferred"
+	// EvidenceDomain: how the products relate operationally. Not encoded in the matrix
+	// at all, and not checkable against it — this is asserted knowledge and the part
+	// most likely to be wrong.
+	EvidenceDomain Evidence = "domain"
+)
+
+// Describe returns a short phrase naming where a claim comes from.
+func (e Evidence) Describe() string {
+	switch e {
+	case EvidencePublished:
+		return "published in the matrix"
+	case EvidenceInferred:
+		return "inferred — upstream publishes nothing for this pair"
+	case EvidenceDomain:
+		return "operational knowledge, not in the matrix"
+	}
+	return string(e)
 }
 
 // Edge is a conceptual relationship between two products.
@@ -83,6 +121,8 @@ type Edge struct {
 	// Primary marks the edges that form the backbone of the explanation. Non-primary
 	// edges exist in the data but are shortcuts rather than the conceptual spine.
 	Primary bool
+	// Evidence says how this relationship is known.
+	Evidence Evidence
 }
 
 // Edges are the conceptual relationships, in reading order.
@@ -95,7 +135,7 @@ var Edges = []Edge{
 		From: "vcenter", To: "esx", Label: "version pairing",
 		Prose: "vCenter and ESX are upgraded as a pair, and vCenter must be at or ahead " +
 			"of the ESX hosts it manages — so vCenter moves first.",
-		Bidirectional: true, Primary: true,
+		Bidirectional: true, Primary: true, Evidence: EvidencePublished,
 	},
 	{
 		From: "vcenter", To: "supervisor", Label: "manages / delivers",
@@ -106,43 +146,46 @@ var Edges = []Edge{
 			"independently. The same Kubernetes version exists on both trains and they are " +
 			"not interchangeable — Supervisor 1.31 on vsc9 is a different thing from " +
 			"Supervisor 1.31 on vsc0, and a vCenter 8 deployment takes only the latter.",
-		Primary: true,
+		Primary: true, Evidence: EvidencePublished,
 	},
 	{
 		From: "esx", To: "supervisor", Label: "hosts run it",
 		Prose: "The Supervisor control plane and its workloads run on the ESX hosts in the " +
 			"cluster, so the host version gates which Supervisor versions can be enabled.",
-		Primary: true,
+		Primary: true, Evidence: EvidencePublished,
 	},
 	{
 		From: "supervisor", To: "vks", Label: "runs",
 		Prose: "VKS runs on top of the Supervisor and is what turns it into a service that " +
 			"can provision guest Kubernetes clusters.",
-		Primary: true,
+		Primary: true, Evidence: EvidencePublished,
 	},
 	{
 		From: "vks", To: "vkr", Label: "provisions",
 		Prose: "VKS provisions guest clusters at a specific Kubernetes release; the VKS " +
 			"version declares the Kubernetes minor it serves (the \"+v1.36\" tail), which " +
 			"is what bounds the usable VKr versions.",
-		Primary: true,
+		Primary: true, Evidence: EvidencePublished,
 	},
 	{
 		From: "vcenter", To: "vks", Label: "published directly",
 		Prose: "vCenter is the hub of the published matrix and has a direct compatibility " +
 			"edge to VKS, which is what makes it possible to solve a whole stack from a " +
 			"single pinned vCenter version.",
+		Evidence: EvidencePublished,
 	},
 	{
 		From: "vcenter", To: "vkr", Label: "published directly",
 		Prose: "vCenter also has a direct published edge to VKr, giving a second " +
 			"independent constraint on the guest cluster version.",
+		Evidence: EvidencePublished,
 	},
 	{
 		From: "supervisor", To: "vkr", Label: "inferred via VKS",
 		Prose: "There is no published Supervisor-to-VKr data upstream. The relationship is " +
 			"real but has to be inferred through VKS and vCenter, so this tool reports it " +
 			"as inferred rather than verified.",
+		Evidence: EvidenceInferred,
 	},
 }
 
@@ -190,6 +233,15 @@ func Pairs() [][2]int {
 		}
 	}
 	return out
+}
+
+// OrderPair returns two products with the lower layer first, so a pair always reads in
+// stack order ("Supervisor × VKr") rather than in upstream product-id order.
+func OrderPair(a, b Product) (Product, Product) {
+	if b.UpgradeOrder < a.UpgradeOrder {
+		return b, a
+	}
+	return a, b
 }
 
 // UpgradeOrder returns the product keys in the order a stack should be upgraded.

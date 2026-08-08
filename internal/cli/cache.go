@@ -97,8 +97,9 @@ func printPairCoverage(out interface{ Write([]byte) (int, error) }, snap *store.
 	}
 	var rows []row
 	for _, pair := range model.Pairs() {
-		a, _ := model.ByID(pair[0])
-		b, _ := model.ByID(pair[1])
+		first, _ := model.ByID(pair[0])
+		second, _ := model.ByID(pair[1])
+		a, b := model.OrderPair(first, second)
 		rows = append(rows, row{a.Label + " × " + b.Label, counts[normalisePair(pair[0], pair[1])]})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].count > rows[j].count })

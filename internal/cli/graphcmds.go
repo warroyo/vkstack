@@ -141,8 +141,9 @@ func newProductsCmd() *cobra.Command {
 			tw = tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "PAIR\tPUBLISHED")
 			for _, pr := range model.Pairs() {
-				a, _ := model.ByID(pr[0])
-				b, _ := model.ByID(pr[1])
+				first, _ := model.ByID(pr[0])
+				second, _ := model.ByID(pr[1])
+				a, b := model.OrderPair(first, second)
 				state := "yes"
 				if !gr.Published(pr[0], pr[1]) {
 					state = "no — inferred, not verified"

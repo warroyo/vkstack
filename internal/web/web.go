@@ -139,20 +139,61 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 		Label     string `json:"label"`
 		Prose     string `json:"prose"`
 		Published bool   `json:"published"`
+		// Evidence says how the claim is known, so an asserted rule is never presented
+		// with the same weight as a matrix lookup.
+		Evidence string `json:"evidence"`
 	}
 	var edges []edgeJSON
 	for _, e := range model.Edges {
 		from, _ := model.ByKey(e.From)
 		to, _ := model.ByKey(e.To)
+		published := covered(from.ID, to.ID)
+		evidence := e.Evidence
+		if evidence == "" {
+			evidence = model.EvidenceDomain
+		}
+		if !published {
+			evidence = model.EvidenceInferred
+		}
 		edges = append(edges, edgeJSON{
 			From: from.Label, To: to.Label, Label: e.Label, Prose: e.Prose,
-			Published: covered(from.ID, to.ID),
+			Published: published, Evidence: evidence.Describe(),
 		})
 	}
+
+	type unknownJSON struct {
+		Title       string `json:"title"`
+		Detail      string `json:"detail"`
+		Consequence string `json:"consequence"`
+		Workaround  string `json:"workaround,omitempty"`
+	}
+	var unknowns []unknownJSON
+	for _, u := range model.Unknowns(covered) {
+		unknowns = append(unknowns, unknownJSON{
+			Title: u.Title, Detail: u.Detail,
+			Consequence: u.Consequence, Workaround: u.Workaround,
+		})
+	}
+
+	type trainJSON struct {
+		Product string   `json:"product"`
+		Trains  []string `json:"trains"`
+		Note    string   `json:"note"`
+	}
+	var trains []trainJSON
+	for _, p := range model.Products {
+		if len(p.Trains) > 0 {
+			trains = append(trains, trainJSON{Product: p.Label, Trains: p.Trains, Note: p.TrainNote})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mermaid":      model.Mermaid(covered),
 		"edges":        edges,
 		"upgradeOrder": model.UpgradeOrder(),
+		"trains":       trains,
+		"grouping":     model.GroupingNotes(),
+		"unknowns":     unknowns,
 	})
 }
 

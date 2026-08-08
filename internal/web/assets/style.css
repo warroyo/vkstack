@@ -434,3 +434,47 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 }
 
 .map-node.is-pinned .map-node-train { fill: rgba(255, 255, 255, 0.82); }
+
+/* ---- the explainer ----------------------------------------------------- */
+
+/* Every claim shows its provenance, so an asserted rule never reads like a lookup. */
+.evidence {
+  display: inline-block;
+  margin: 0 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid currentColor;
+}
+
+.evidence.known { color: var(--pick); }
+.evidence.unknown { color: var(--warn); }
+
+.callout {
+  margin: 1rem 0;
+  padding: 0.85rem 1.05rem;
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--signal);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.callout h3 { margin: 0 0 0.35rem; font-size: 0.9rem; }
+.callout p { margin: 0; color: var(--muted); font-size: 0.88rem; }
+.callout code { font-family: var(--mono); color: var(--ink); }
+
+.unknown {
+  margin-bottom: 0.8rem;
+  padding: 0.85rem 1.05rem;
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.unknown h3 { margin: 0 0 0.4rem; font-size: 0.9rem; }
+.unknown p { margin: 0 0 0.4rem; font-size: 0.88rem; color: var(--muted); max-width: 76ch; }
+.unknown p:last-child { margin-bottom: 0; }
+.unknown strong { color: var(--ink); }

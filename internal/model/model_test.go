@@ -95,12 +95,69 @@ func TestMermaidDeclaresEveryReferencedNode(t *testing.T) {
 // main thing the diagram teaches beyond the box layout.
 func TestMermaidMarksUnpublishedPairs(t *testing.T) {
 	out := Mermaid(DefaultCoverage)
-	if !strings.Contains(out, "not published upstream") {
-		t.Error("expected unpublished pairs to be labelled in the diagram")
+	if !strings.Contains(out, "no data") {
+		t.Error("expected unpublished pairs to be flagged in the diagram")
 	}
-	// With everything published, that label must disappear.
-	if strings.Contains(Mermaid(AllPublished), "not published upstream") {
-		t.Error("with full coverage no edge should claim to be unpublished")
+	// With everything published, that flag must disappear.
+	if strings.Contains(Mermaid(AllPublished), "no data") {
+		t.Error("with full coverage no edge should claim to be missing data")
+	}
+}
+
+// The two Supervisor trains are the most misread fact in this model, so the diagram has
+// to carry them rather than leaving them to prose.
+func TestMermaidShowsSupervisorTrains(t *testing.T) {
+	out := Mermaid(DefaultCoverage)
+	for _, want := range []string{"two trains", "vsc9", "vsc0"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected the diagram to mention %q", want)
+		}
+	}
+}
+
+// Every edge must declare how it is known, or an asserted rule reads like a lookup.
+func TestEveryEdgeDeclaresEvidence(t *testing.T) {
+	for _, e := range Edges {
+		if e.Evidence == "" {
+			t.Errorf("edge %s->%s has no evidence set", e.From, e.To)
+		}
+		if e.Evidence.Describe() == string(e.Evidence) {
+			t.Errorf("edge %s->%s has an unrecognised evidence %q", e.From, e.To, e.Evidence)
+		}
+	}
+}
+
+// The unknowns list is the honesty surface: it must name every unpublished pair and say
+// what each one costs.
+func TestUnknownsCoverEveryUnpublishedPair(t *testing.T) {
+	unknowns := Unknowns(DefaultCoverage)
+	if len(unknowns) < len(KnownUnpublishedPairs()) {
+		t.Fatalf("got %d unknowns, expected at least one per unpublished pair (%d)",
+			len(unknowns), len(KnownUnpublishedPairs()))
+	}
+	for _, pr := range KnownUnpublishedPairs() {
+		a, _ := ByID(pr[0])
+		b, _ := ByID(pr[1])
+		found := false
+		for _, u := range unknowns {
+			if strings.Contains(u.Title, a.Label) && strings.Contains(u.Title, b.Label) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no unknown documents the %s × %s gap", a.Label, b.Label)
+		}
+	}
+	for _, u := range unknowns {
+		if u.Detail == "" || u.Consequence == "" {
+			t.Errorf("unknown %q must say what it is and what it means", u.Title)
+		}
+	}
+
+	// With full coverage the pair-specific entries drop out, but the standing limits
+	// (upgrade safety, untested combinations, the version floor) must remain.
+	if len(Unknowns(AllPublished)) == 0 {
+		t.Error("expected standing limits even when every pair is published")
 	}
 }
 

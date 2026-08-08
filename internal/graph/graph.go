@@ -73,6 +73,7 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 		ByProduct: make(map[int][]int),
 		Coverage:  make(map[[2]int]bool),
 		Excluded:  make(map[int]int),
+		FetchedAt: snap.FetchedAt,
 	}
 
 	for _, pc := range snap.Coverage {

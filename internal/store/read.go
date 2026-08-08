@@ -12,6 +12,8 @@ type Snapshot struct {
 	Releases []Release
 	Compat   []Compat
 	Coverage []PairCoverage
+	// FetchedAt is when the cache was last completely refreshed, in epoch ms.
+	FetchedAt int64
 }
 
 // Load reads the entire cache.
@@ -85,6 +87,12 @@ func (db *DB) Load() (*Snapshot, error) {
 	if err := covRows.Err(); err != nil {
 		return nil, fmt.Errorf("loading pair coverage: %w", err)
 	}
+
+	at, err := db.FetchedAt()
+	if err != nil {
+		return nil, err
+	}
+	s.FetchedAt = at.UnixMilli()
 
 	return s, nil
 }

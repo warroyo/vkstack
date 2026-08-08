@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>interop — vSphere stack compatibility</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>interop</h1>
+    <nav id="tabs">
+      <button data-view="model" class="active">How this fits together</button>
+      <button data-view="stack">Stack builder</button>
+      <button data-view="graph">Compatibility graph</button>
+      <button data-view="plan">Upgrade planner</button>
+    </nav>
+    <div id="meta" class="meta"></div>
+  </header>
+
+  <main>
+    <!-- The whiteboard: the orientation layer, and the landing tab on first visit. -->
+    <section id="view-model" class="view">
+      <p class="lede">
+        The interoperability matrix answers one question at a time: is A compatible with B.
+        This is the shape of the whole dependency — which component pins which, and where
+        there is simply no published answer.
+      </p>
+      <div class="diagram" id="model-diagram"></div>
+      <h2>What each relationship means</h2>
+      <ul id="model-prose" class="prose"></ul>
+      <p class="cta"><button id="to-stack">Show me a real stack →</button></p>
+    </section>
+
+    <!-- The everyday answer: pin one version, get the whole stack. -->
+    <section id="view-stack" class="view hidden">
+      <p class="lede">
+        Pick any one version. Every other dropdown narrows to only what can still form a
+        valid stack, so an invalid combination cannot be assembled.
+      </p>
+      <div id="stack-pickers" class="pickers"></div>
+      <p><button id="stack-reset" class="secondary">Clear all</button>
+         <label class="inline"><input type="checkbox" id="stack-patches"> include patch releases</label></p>
+      <div id="stack-error" class="error hidden"></div>
+      <div id="stack-result"></div>
+    </section>
+
+    <!-- The raw data, focused on one release. -->
+    <section id="view-graph" class="view hidden">
+      <p class="lede">
+        Everything one release is compatible with, straight from the published matrix.
+        Dashed links are compatible but untested upstream.
+      </p>
+      <div id="graph-pickers" class="pickers"></div>
+      <div id="graph-note" class="note hidden"></div>
+      <div class="diagram" id="graph-diagram"></div>
+    </section>
+
+    <!-- Ordered upgrade steps grouped into maintenance windows. -->
+    <section id="view-plan" class="view hidden">
+      <p class="lede">
+        Where you are now, where you want to be, and the order to move in. Steps that leave
+        the stack unsupported are grouped into a window that has to be finished in one go.
+      </p>
+      <div class="plan-grid">
+        <div>
+          <h2>Current</h2>
+          <div id="plan-from" class="pickers"></div>
+        </div>
+        <div>
+          <h2>Target</h2>
+          <div id="plan-to" class="pickers"></div>
+          <p class="hint">Leave a product blank to let the planner choose it.</p>
+        </div>
+      </div>
+      <p><button id="plan-run">Plan the upgrade</button></p>
+      <div id="plan-result"></div>
+    </section>
+  </main>
+
+  <script src="vendor/mermaid.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

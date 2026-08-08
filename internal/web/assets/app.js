@@ -1,22 +1,37 @@
 "use strict";
 
-// Everything is served from the same origin and the whole dataset is small, so the app
-// re-asks the server on each change rather than mirroring the graph in the browser.
+// The whole dataset is small and served from the same origin, so the app re-asks the
+// server on every selection rather than mirroring the compatibility graph in the browser.
+// That keeps one solver — the Go one — as the single source of truth for what "lit" means.
 
 const state = {
-  products: [],
-  pins: {},        // stack builder: product key -> version
-  planFrom: {},
-  planTo: {},
+  layers: [],
+  lit: null,          // Set of node ids on the current path, or null when nothing is pinned
+  pin: null,          // { product, version }
+  recommended: null,
+  edges: [],          // connections between adjacent layers, for the current selection
+  baseCounts: {},     // layer key -> total node count, for the narrowing readout
+};
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const svgEl = (tag, attrs = {}, text = null) => {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v !== null && v !== undefined) node.setAttribute(k, v);
+  }
+  if (text !== null) node.textContent = text;
+  return node;
 };
 
 const $ = (sel) => document.querySelector(sel);
+
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
     if (k === "class") node.className = v;
     else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else if (v !== null && v !== undefined) node.setAttribute(k, v);
+    else node.setAttribute(k, v === true ? "" : v);
   }
   for (const kid of kids.flat()) {
     if (kid === null || kid === undefined) continue;
@@ -25,21 +40,326 @@ const el = (tag, attrs = {}, ...kids) => {
   return node;
 };
 
-async function api(path, options) {
-  const res = await fetch(path, options);
+async function api(path) {
+  const res = await fetch(path);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
   return body;
 }
 
-const postJSON = (path, payload) =>
-  api(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+// --- the stack map ---------------------------------------------------------
+
+async function loadStack() {
+  let url = "/api/stackmap";
+  if (state.pin) {
+    url += `?product=${encodeURIComponent(state.pin.product)}` +
+           `&version=${encodeURIComponent(state.pin.version)}`;
+  }
+
+  let data;
+  try {
+    data = await api(url);
+  } catch (err) {
+    $("#stack-error").textContent = err.message;
+    $("#stack-error").classList.remove("hidden");
+    return;
+  }
+  $("#stack-error").classList.add("hidden");
+
+  state.layers = data.layers;
+  state.lit = data.lit ? new Set(data.lit) : null;
+  state.recommended = data.recommended || null;
+  state.edges = data.edges || [];
+  for (const layer of data.layers) state.baseCounts[layer.key] ??= layer.nodes.length;
+
+  renderMap();
+  renderStrata();
+  renderPinControls();
+  renderRecommended();
+}
+
+// --- the map ---------------------------------------------------------------
+//
+// A layered diagram drawn bottom-up: the selected version at the base, with real
+// connectors branching up through Supervisor, VKS and VKr. Only the lit subgraph is
+// drawn — the full cross-product is thousands of edges and reads as noise.
+
+const MAP = {
+  nodeH: 30,
+  padX: 14,       // horizontal padding inside a node box
+  gapX: 12,       // gap between sibling nodes
+  rowGap: 74,     // vertical distance between layers
+  marginX: 110,   // room for the layer label on the left
+  marginY: 20,
+  charW: 7.4,     // approximate width of one monospace character at 12.5px
+};
+
+function renderMap() {
+  const host = $("#map");
+  const caption = $("#map-caption");
+  host.textContent = "";
+
+  if (!state.pin) {
+    host.append(el("p", { class: "map-empty" },
+      "Pick a version below to see what branches out of it."));
+    caption.textContent = "";
+    return;
+  }
+
+  // Bottom-up: layers[0] is vCenter, and row 0 sits at the bottom of the drawing.
+  const rows = state.layers.map((layer) => ({
+    layer,
+    nodes: layer.nodes.filter((n) => state.lit?.has(n.id)),
+  }));
+
+  const widths = new Map();
+  for (const row of rows) {
+    for (const n of row.nodes) {
+      widths.set(n.id, Math.max(52, n.label.length * MAP.charW + MAP.padX * 2));
+    }
+  }
+
+  const rowWidth = (row) =>
+    row.nodes.reduce((sum, n) => sum + widths.get(n.id), 0) +
+    Math.max(0, row.nodes.length - 1) * MAP.gapX;
+
+  const contentW = Math.max(...rows.map(rowWidth), 260);
+  const width = contentW + MAP.marginX + 30;
+  const height = (rows.length - 1) * MAP.rowGap + MAP.nodeH + MAP.marginY * 2;
+
+  // Place every node, centring each row over the widest one.
+  const pos = new Map();
+  rows.forEach((row, i) => {
+    const y = height - MAP.marginY - MAP.nodeH - i * MAP.rowGap;
+    let x = MAP.marginX + (contentW - rowWidth(row)) / 2;
+    for (const n of row.nodes) {
+      const w = widths.get(n.id);
+      pos.set(n.id, { x, y, w, cx: x + w / 2 });
+      x += w + MAP.gapX;
+    }
   });
 
-// --- mermaid ---------------------------------------------------------------
+  const svg = svgEl("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    width, height, class: "map-svg", role: "presentation",
+  });
+
+  // Connectors first, so nodes always sit on top of them.
+  const links = svgEl("g", { class: "map-links" });
+  for (const edge of state.edges) {
+    const a = pos.get(edge.from);
+    const b = pos.get(edge.to);
+    if (!a || !b) continue;
+    const y1 = a.y;                    // top of the lower node
+    const y2 = b.y + MAP.nodeH;        // bottom of the upper node
+    const mid = (y1 + y2) / 2;
+    links.append(svgEl("path", {
+      d: `M ${a.cx} ${y1} C ${a.cx} ${mid}, ${b.cx} ${mid}, ${b.cx} ${y2}`,
+      class: "map-link",
+    }));
+  }
+  svg.append(links);
+
+  rows.forEach((row, i) => {
+    const y = height - MAP.marginY - MAP.nodeH - i * MAP.rowGap;
+    const label = svgEl("text", {
+      x: MAP.marginX - 18, y: y + MAP.nodeH / 2 + 4,
+      class: "map-layer-label", "text-anchor": "end",
+    }, row.layer.label);
+    svg.append(label);
+
+    for (const n of row.nodes) {
+      const p = pos.get(n.id);
+      const g = svgEl("g", { class: nodeMapClass(row.layer, n), tabindex: "0", role: "button" });
+      g.append(svgEl("rect", {
+        x: p.x, y: p.y, width: p.w, height: MAP.nodeH, rx: 6, class: "map-node-box",
+      }));
+      g.append(svgEl("text", {
+        x: p.cx, y: p.y + MAP.nodeH / 2 + 4, "text-anchor": "middle", class: "map-node-text",
+      }, n.label));
+      g.addEventListener("click", () => togglePin(row.layer.key, n));
+      g.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); togglePin(row.layer.key, n); }
+      });
+      g.addEventListener("mouseenter", (ev) => showPeek(ev.currentTarget, row.layer, n));
+      g.addEventListener("mouseleave", hidePeek);
+      svg.append(g);
+    }
+  });
+
+  host.append(svg);
+
+  const counts = rows.map((r) => `${r.nodes.length} ${r.layer.label}`).reverse().join(" · ");
+  caption.textContent = `Branching from ${labelFor(state.pin.product)} ${state.pin.version} — ${counts}`;
+}
+
+function nodeMapClass(layer, node) {
+  const classes = ["map-node"];
+  if (state.pin && state.pin.product === layer.key && state.pin.version === pinVersionFor(node)) {
+    classes.push("is-pinned");
+  } else if (isRecommended(layer.key, node)) {
+    classes.push("is-picked");
+  }
+  return classes.join(" ");
+}
+
+function renderStrata() {
+  const root = $("#strata");
+  root.textContent = "";
+
+  for (const layer of state.layers) {
+    const litCount = state.lit
+      ? layer.nodes.filter((n) => state.lit.has(n.id)).length
+      : layer.nodes.length;
+    const total = state.baseCounts[layer.key] ?? layer.nodes.length;
+
+    const count = state.lit && litCount !== total
+      ? el("div", { class: "layer-count" },
+          el("span", { class: "narrowed" }, String(litCount)), ` of ${total}`)
+      : el("div", { class: "layer-count" }, `${total}`);
+
+    const nodes = el("div", { class: "layer-nodes" });
+    for (const node of layer.nodes) {
+      nodes.append(nodeButton(layer, node));
+    }
+
+    root.append(
+      el("div", { class: "layer" },
+        el("div", { class: "layer-spine" },
+          el("div", { class: "layer-name" }, layer.label), count),
+        nodes));
+  }
+}
+
+function nodeButton(layer, node) {
+  const pinned = state.pin &&
+    state.pin.product === layer.key &&
+    state.pin.version === pinVersionFor(node);
+  const lit = state.lit ? state.lit.has(node.id) : false;
+
+  const classes = ["node"];
+  if (node.noData) classes.push("nodata");
+  if (pinned) classes.push("pinned");
+  else if (state.lit && lit) classes.push("lit");
+  else if (state.lit) classes.push("dim");
+  if (!pinned && isRecommended(layer.key, node)) classes.push("picked");
+
+  const label = [node.label];
+  if (node.noData) label.push(" · no data yet");
+
+  const button = el("button", {
+      class: classes.join(" "),
+      type: "button",
+      "aria-pressed": pinned ? "true" : "false",
+      onclick: () => togglePin(layer.key, node),
+      onmouseenter: (ev) => showPeek(ev.currentTarget, layer, node),
+      onfocus: (ev) => showPeek(ev.currentTarget, layer, node),
+      onmouseleave: hidePeek,
+      onblur: hidePeek,
+    },
+    label.join(""),
+    node.detail
+      ? el("span", { class: "detail" },
+          layer.key === "vcenter" ? `on ESX ${node.detail}` : node.detail)
+      : null);
+
+  return button;
+}
+
+// A node stands for one or more releases. Pinning uses the newest, which is what the
+// server lists first.
+function pinVersionFor(node) {
+  return node.releases && node.releases.length ? node.releases[0] : node.label;
+}
+
+function isRecommended(layerKey, node) {
+  if (!state.recommended) return false;
+  const chosen = state.recommended[layerKey];
+  return !!chosen && node.releases?.includes(chosen);
+}
+
+function togglePin(layerKey, node) {
+  const version = pinVersionFor(node);
+  const same = state.pin && state.pin.product === layerKey && state.pin.version === version;
+  state.pin = same ? null : { product: layerKey, version };
+  hidePeek();
+  loadStack();
+}
+
+function renderPinControls() {
+  const label = $("#pin-label");
+  const clear = $("#clear-pin");
+  if (state.pin) {
+    const layer = state.layers.find((l) => l.key === state.pin.product);
+    label.textContent = `${layer ? layer.label : state.pin.product} ${state.pin.version}`;
+    clear.classList.remove("hidden");
+  } else {
+    label.textContent = "";
+    clear.classList.add("hidden");
+  }
+}
+
+function renderRecommended() {
+  const box = $("#recommended");
+  box.textContent = "";
+  if (!state.recommended) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+
+  const dl = el("dl");
+  // Bottom-up, matching the map above it.
+  for (const key of ["vcenter", "esx", "supervisor", "vks", "vkr"]) {
+    const version = state.recommended[key];
+    if (!version) continue;
+    dl.append(el("dt", {}, labelFor(key)), el("dd", {}, version));
+  }
+  box.append(el("h2", {}, "Newest working stack from here"), dl);
+}
+
+function labelFor(key) {
+  const known = { vcenter: "vCenter", esx: "ESX", supervisor: "Supervisor", vks: "VKS", vkr: "VKr" };
+  return known[key] || key;
+}
+
+// --- peek popover ----------------------------------------------------------
+
+function showPeek(anchor, layer, node) {
+  const peek = $("#peek");
+  peek.textContent = "";
+
+  const lines = [];
+  if (node.noData) {
+    lines.push("Upstream publishes no compatibility data for this release yet.");
+  } else if (node.releases?.length > 1) {
+    lines.push(...node.releases);
+  } else if (node.releases?.length === 1 && node.releases[0] !== node.label) {
+    lines.push(node.releases[0]);
+  }
+  if (layer.key === "vcenter" && node.hosts?.length) {
+    lines.unshift(`Runs on ESX: ${node.hosts.join(", ")}`);
+  }
+  if (!lines.length) return;
+
+  peek.append(el("div", { class: "peek-title" }, `${layer.label} ${node.label}`));
+  for (const line of lines.slice(0, 14)) peek.append(el("div", {}, line));
+  if (lines.length > 14) peek.append(el("div", {}, `+${lines.length - 14} more`));
+
+  peek.classList.remove("hidden");
+  const box = anchor.getBoundingClientRect();
+  const size = peek.getBoundingClientRect();
+  // Prefer above the node; flip below when there is no room.
+  const top = box.top - size.height - 8;
+  peek.style.top = `${top < 8 ? box.bottom + 8 : top}px`;
+  peek.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - size.width - 8))}px`;
+}
+
+function hidePeek() {
+  $("#peek").classList.add("hidden");
+}
+
+// --- the conceptual model --------------------------------------------------
 
 const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 mermaid.initialize({
@@ -49,297 +369,76 @@ mermaid.initialize({
   flowchart: { curve: "basis", nodeSpacing: 45, rankSpacing: 55, htmlLabels: true },
 });
 
-let diagramSeq = 0;
-async function renderDiagram(target, definition) {
-  target.textContent = "";
+let modelLoaded = false;
+async function loadModel() {
+  if (modelLoaded) return;
+  const data = await api("/api/model");
   try {
-    const { svg } = await mermaid.render(`d${++diagramSeq}`, definition);
-    target.innerHTML = svg;
+    const { svg } = await mermaid.render("model", data.mermaid);
+    $("#model-diagram").innerHTML = svg;
   } catch (err) {
-    // A diagram that will not parse should say so rather than leaving a blank panel.
-    target.append(el("div", { class: "error" }, `could not render diagram: ${err.message}`));
+    $("#model-diagram").append(el("div", { class: "error" },
+      `could not render diagram: ${err.message}`));
   }
+
+  const list = $("#model-prose");
+  list.textContent = "";
+  for (const e of data.edges) {
+    list.append(el("li", {},
+      el("strong", {}, `${e.from} → ${e.to}`),
+      ` — ${e.prose}`,
+      e.published ? null : el("span", { class: "unpublished" }, " (not published upstream)")));
+  }
+  modelLoaded = true;
 }
 
-// --- tabs ------------------------------------------------------------------
-
-const VIEWS = ["model", "stack", "graph", "plan"];
+// --- tabs and boot ---------------------------------------------------------
 
 function showView(name) {
-  for (const v of VIEWS) {
+  for (const v of ["stack", "model"]) {
     $(`#view-${v}`).classList.toggle("hidden", v !== name);
   }
   for (const btn of document.querySelectorAll("#tabs button")) {
     btn.classList.toggle("active", btn.dataset.view === name);
   }
-  // Remember the tab so returning users land on the tool, while newcomers still get
-  // the explainer first.
   localStorage.setItem("interop.view", name);
-  if (name === "graph") refreshGraphView();
+  if (name === "model") loadModel();
 }
-
-// --- model view ------------------------------------------------------------
-
-async function loadModel() {
-  const data = await api("/api/model");
-  await renderDiagram($("#model-diagram"), data.mermaid);
-
-  const list = $("#model-prose");
-  list.textContent = "";
-  for (const e of data.edges) {
-    list.append(
-      el("li", {},
-        el("strong", {}, `${e.from} → ${e.to}`),
-        ` — ${e.prose}`,
-        e.published ? null : el("span", { class: "unpublished" }, " (not published upstream)")
-      )
-    );
-  }
-}
-
-// --- shared pickers --------------------------------------------------------
-
-async function versionsFor(key) {
-  const rels = await api(`/api/releases?product=${encodeURIComponent(key)}`);
-  return rels.map((r) => r.version);
-}
-
-// buildPickers renders one select per product. `options` optionally restricts each
-// product's choices, which is what makes the stack builder narrow as you pin things.
-function buildPickers(container, selected, onChange, options = null) {
-  container.textContent = "";
-  for (const p of state.products) {
-    const allowed = options && options[p.key] ? options[p.key] : p.versions;
-    const current = selected[p.key] || "";
-    const select = el("select", {
-      class: current ? "pinned" : "",
-      onchange: (ev) => onChange(p.key, ev.target.value),
-    });
-    select.append(el("option", { value: "" }, `any (${allowed.length})`));
-    for (const v of allowed) {
-      select.append(el("option", { value: v, ...(v === current ? { selected: "selected" } : {}) }, v));
-    }
-    // A pinned version that the current narrowing excludes must still be visible,
-    // otherwise the control would silently drop the user's own choice.
-    if (current && !allowed.includes(current)) {
-      select.append(el("option", { value: current, selected: "selected" }, `${current} (conflicts)`));
-    }
-    container.append(el("div", { class: "picker" }, el("label", {}, p.label), select));
-  }
-}
-
-// --- stack builder ---------------------------------------------------------
-
-async function refreshStack() {
-  const payload = { pins: state.pins, patches: $("#stack-patches").checked };
-  let data;
-  try {
-    data = await postJSON("/api/stack", payload);
-  } catch (err) {
-    $("#stack-error").textContent = err.message;
-    $("#stack-error").classList.remove("hidden");
-    return;
-  }
-
-  const errBox = $("#stack-error");
-  const out = $("#stack-result");
-  out.textContent = "";
-
-  if (!data.ok) {
-    errBox.textContent = data.error;
-    errBox.classList.remove("hidden");
-    buildPickers($("#stack-pickers"), state.pins, onStackPin);
-    return;
-  }
-  errBox.classList.add("hidden");
-  buildPickers($("#stack-pickers"), state.pins, onStackPin, data.options);
-
-  const dl = el("dl");
-  for (const p of state.products) {
-    const version = data.recommended[p.key];
-    if (!version) continue;
-    dl.append(
-      el("dt", {}, p.label),
-      el("dd", { class: "mono" }, version,
-        state.pins[p.key] ? el("span", { class: "pin-badge" }, "pinned") : null)
-    );
-  }
-  out.append(el("div", { class: "stack-summary" },
-    el("h2", {}, "Recommended stack"), dl));
-
-  out.append(el("h2", {}, "Pair by pair"));
-  out.append(verdictTable(data.verdicts));
-
-  if (data.inferred && data.inferred.length) {
-    out.append(el("div", { class: "note" },
-      `Inferred rather than verified — upstream publishes no data for: ${data.inferred.join(", ")}.`));
-  }
-}
-
-function verdictTable(verdicts) {
-  const rows = verdicts.map((v) =>
-    el("tr", {},
-      el("td", {}, `${v.a} × ${v.b}`),
-      el("td", { class: "mono" }, `${v.aVersion} / ${v.bVersion}`),
-      el("td", { class: `state-${v.state}` }, v.detail))
-  );
-  return el("div", { class: "table-wrap" },
-    el("table", {},
-      el("thead", {}, el("tr", {},
-        el("th", {}, "Pair"), el("th", {}, "Versions"), el("th", {}, "Verdict"))),
-      el("tbody", {}, rows)));
-}
-
-function onStackPin(key, value) {
-  if (value) state.pins[key] = value;
-  else delete state.pins[key];
-  refreshStack();
-}
-
-// --- graph view ------------------------------------------------------------
-
-let graphFocus = { product: null, version: null };
-
-function buildGraphPickers() {
-  const container = $("#graph-pickers");
-  container.textContent = "";
-
-  const productSelect = el("select", {
-    onchange: (ev) => {
-      graphFocus = { product: ev.target.value, version: null };
-      buildGraphPickers();
-      refreshGraphView();
-    },
-  });
-  for (const p of state.products) {
-    productSelect.append(el("option", {
-      value: p.key, ...(p.key === graphFocus.product ? { selected: "selected" } : {}),
-    }, p.label));
-  }
-
-  const product = state.products.find((p) => p.key === graphFocus.product) || state.products[0];
-  graphFocus.product = product.key;
-  if (!graphFocus.version) graphFocus.version = product.versions[0];
-
-  const versionSelect = el("select", {
-    onchange: (ev) => { graphFocus.version = ev.target.value; refreshGraphView(); },
-  });
-  for (const v of product.versions) {
-    versionSelect.append(el("option", {
-      value: v, ...(v === graphFocus.version ? { selected: "selected" } : {}),
-    }, v));
-  }
-
-  container.append(
-    el("div", { class: "picker" }, el("label", {}, "Focus on"), productSelect),
-    el("div", { class: "picker" }, el("label", {}, "Version"), versionSelect));
-}
-
-async function refreshGraphView() {
-  if (!graphFocus.product || !graphFocus.version) return;
-  const url = `/api/graph?product=${encodeURIComponent(graphFocus.product)}` +
-    `&version=${encodeURIComponent(graphFocus.version)}`;
-  try {
-    const data = await api(url);
-    await renderDiagram($("#graph-diagram"), data.mermaid);
-    const note = $("#graph-note");
-    note.textContent = data.note || "";
-    note.classList.toggle("hidden", !data.note);
-  } catch (err) {
-    $("#graph-diagram").textContent = "";
-    $("#graph-diagram").append(el("div", { class: "error" }, err.message));
-  }
-}
-
-// --- upgrade planner -------------------------------------------------------
-
-async function runPlan() {
-  const out = $("#plan-result");
-  out.textContent = "";
-  let data;
-  try {
-    data = await postJSON("/api/plan", { from: state.planFrom, to: state.planTo });
-  } catch (err) {
-    out.append(el("div", { class: "error" }, err.message));
-    return;
-  }
-  if (!data.ok) {
-    out.append(el("div", { class: "error" }, data.error));
-    if (data.reached && Object.keys(data.reached).length) {
-      const dl = el("dl");
-      for (const p of state.products) {
-        if (data.reached[p.key]) dl.append(el("dt", {}, p.label), el("dd", { class: "mono" }, data.reached[p.key]));
-      }
-      out.append(el("div", { class: "stack-summary" }, el("h2", {}, "Furthest reachable stack"), dl));
-    }
-    return;
-  }
-
-  out.append(el("h2", {}, `${data.steps} step(s) in ${data.windows.length} maintenance window(s)`));
-  let n = 0;
-  data.windows.forEach((win, i) => {
-    const steps = el("ol");
-    for (const s of win.steps) {
-      n++;
-      steps.append(el("li", {},
-        el("strong", {}, `Upgrade ${s.product}`),
-        el("br"),
-        el("span", { class: "mono" }, `${s.from} → ${s.to}`),
-        s.supported ? null : el("span", { class: "blocking" }, `transitional: ${s.blocking}`)));
-    }
-    out.append(el("div", { class: `window${win.transitional ? " transitional" : ""}` },
-      el("h3", {}, `Window ${i + 1}`),
-      win.transitional
-        ? el("div", { class: "warn" }, "Do not stop partway — the stack is unsupported until the last step.")
-        : null,
-      steps));
-  });
-}
-
-// --- boot ------------------------------------------------------------------
 
 async function boot() {
-  let meta;
   try {
-    meta = await api("/api/meta");
+    const meta = await api("/api/meta");
+    const mode = meta.refreshInterval
+      ? `refreshes every ${meta.refreshInterval}`
+      : (meta.readOnly ? "read-only" : "refresh on demand");
+    $("#meta").textContent =
+      `${meta.fetchedAt} · ${meta.ageHours}h old · ${mode} · ` +
+      meta.products.map((p) => `${p.label} ${p.count}`).join("  ");
   } catch (err) {
-    $("#meta").append(el("span", { class: "state-bad" },
-      `${err.message} — run \`interop refresh\` and reload.`));
-    // The whiteboard needs no data, so still offer it.
-    await loadModel().catch(() => {});
-    return;
+    $("#meta").textContent = err.message;
   }
 
-  const mode = meta.refreshInterval
-    ? `refreshes every ${meta.refreshInterval}`
-    : (meta.readOnly ? "read-only" : "refresh on demand");
-  $("#meta").textContent =
-    `data fetched ${meta.fetchedAt} (${meta.ageHours}h ago) · ${mode} · ` +
-    meta.products.map((p) => `${p.label} ${p.count}`).join(" · ");
-
-  state.products = meta.products;
-  await Promise.all(state.products.map(async (p) => { p.versions = await versionsFor(p.key); }));
-
-  await loadModel();
-  await refreshStack();
-  buildGraphPickers();
-
-  buildPickers($("#plan-from"), state.planFrom, (k, v) => {
-    if (v) state.planFrom[k] = v; else delete state.planFrom[k];
-  });
-  buildPickers($("#plan-to"), state.planTo, (k, v) => {
-    if (v) state.planTo[k] = v; else delete state.planTo[k];
-  });
-
-  showView(localStorage.getItem("interop.view") || "model");
+  await loadStack();
+  // Start on the newest base version that has data, so the map is populated on arrival
+  // rather than showing an empty frame.
+  if (!state.pin) {
+    const base = state.layers.find((l) => l.key === "vcenter");
+    const newest = base?.nodes.find((n) => !n.noData);
+    if (newest) {
+      state.pin = { product: "vcenter", version: pinVersionFor(newest) };
+      await loadStack();
+    }
+  }
+  showView(localStorage.getItem("interop.view") || "stack");
 }
 
 for (const btn of document.querySelectorAll("#tabs button")) {
   btn.addEventListener("click", () => showView(btn.dataset.view));
 }
-$("#to-stack").addEventListener("click", () => showView("stack"));
-$("#stack-reset").addEventListener("click", () => { state.pins = {}; refreshStack(); });
-$("#stack-patches").addEventListener("change", refreshStack);
-$("#plan-run").addEventListener("click", runPlan);
+$("#clear-pin").addEventListener("click", () => { state.pin = null; loadStack(); });
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && state.pin) { state.pin = null; loadStack(); }
+});
+window.addEventListener("scroll", hidePeek, { passive: true });
 
 boot();

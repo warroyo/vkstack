@@ -3,80 +3,75 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>interop — vSphere stack compatibility</title>
+  <title>interop — the vSphere stack, layer by layer</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>interop</h1>
-    <nav id="tabs">
-      <button data-view="model" class="active">How this fits together</button>
-      <button data-view="stack">Stack builder</button>
-      <button data-view="graph">Compatibility graph</button>
-      <button data-view="plan">Upgrade planner</button>
-    </nav>
-    <div id="meta" class="meta"></div>
+  <header class="masthead">
+    <div class="masthead-row">
+      <h1>interop</h1>
+      <nav id="tabs">
+        <button data-view="stack" class="active">The stack</button>
+        <button data-view="model">How it fits together</button>
+      </nav>
+    </div>
+    <p id="meta" class="meta"></p>
   </header>
 
   <main>
-    <!-- The whiteboard: the orientation layer, and the landing tab on first visit. -->
-    <section id="view-model" class="view">
+    <!-- The main event: every layer at once, bottom-up. -->
+    <section id="view-stack" class="view">
+      <div class="stack-head">
+        <p class="lede" id="stack-lede">
+          Pick a version at any layer. Everything that can be in the same working stack
+          stays lit; everything that cannot fades back.
+        </p>
+        <div class="stack-actions">
+          <span id="pin-label" class="pin-label"></span>
+          <button id="clear-pin" class="ghost hidden">Clear</button>
+        </div>
+      </div>
+
+      <div id="stack-error" class="error hidden"></div>
+
+      <!-- The map: what branches out of the selected version, drawn bottom-up. -->
+      <figure class="map-frame">
+        <div id="map" class="map" role="img" aria-labelledby="map-caption"></div>
+        <figcaption id="map-caption" class="map-caption"></figcaption>
+      </figure>
+
+      <h2 class="section-label">Every version, by layer</h2>
+      <p class="section-note">
+        Click any version to branch from it. Lit versions can be in a stack with your
+        selection; faded ones cannot.
+      </p>
+
+      <!-- Rows render bottom-up: the base you build on first is at the bottom. -->
+      <div id="strata" class="strata" aria-label="Compatibility layers, bottom to top"></div>
+
+      <div id="recommended" class="recommended hidden"></div>
+
+      <p class="footnote">
+        Lit means a complete valid stack exists containing both that version and your
+        selection — not just that two products happen to list each other.
+        Supervisor, VKS and VKr are grouped by version line; vCenter is not, because its
+        patch letter changes what it supports.
+      </p>
+    </section>
+
+    <section id="view-model" class="view hidden">
       <p class="lede">
-        The interoperability matrix answers one question at a time: is A compatible with B.
-        This is the shape of the whole dependency — which component pins which, and where
-        there is simply no published answer.
+        The matrix answers one question at a time: is A compatible with B. This is the
+        shape of the whole dependency — which component pins which, and where there is
+        simply no published answer.
       </p>
       <div class="diagram" id="model-diagram"></div>
       <h2>What each relationship means</h2>
       <ul id="model-prose" class="prose"></ul>
-      <p class="cta"><button id="to-stack">Show me a real stack →</button></p>
-    </section>
-
-    <!-- The everyday answer: pin one version, get the whole stack. -->
-    <section id="view-stack" class="view hidden">
-      <p class="lede">
-        Pick any one version. Every other dropdown narrows to only what can still form a
-        valid stack, so an invalid combination cannot be assembled.
-      </p>
-      <div id="stack-pickers" class="pickers"></div>
-      <p><button id="stack-reset" class="secondary">Clear all</button>
-         <label class="inline"><input type="checkbox" id="stack-patches"> include patch releases</label></p>
-      <div id="stack-error" class="error hidden"></div>
-      <div id="stack-result"></div>
-    </section>
-
-    <!-- The raw data, focused on one release. -->
-    <section id="view-graph" class="view hidden">
-      <p class="lede">
-        Everything one release is compatible with, straight from the published matrix.
-        Dashed links are compatible but untested upstream.
-      </p>
-      <div id="graph-pickers" class="pickers"></div>
-      <div id="graph-note" class="note hidden"></div>
-      <div class="diagram" id="graph-diagram"></div>
-    </section>
-
-    <!-- Ordered upgrade steps grouped into maintenance windows. -->
-    <section id="view-plan" class="view hidden">
-      <p class="lede">
-        Where you are now, where you want to be, and the order to move in. Steps that leave
-        the stack unsupported are grouped into a window that has to be finished in one go.
-      </p>
-      <div class="plan-grid">
-        <div>
-          <h2>Current</h2>
-          <div id="plan-from" class="pickers"></div>
-        </div>
-        <div>
-          <h2>Target</h2>
-          <div id="plan-to" class="pickers"></div>
-          <p class="hint">Leave a product blank to let the planner choose it.</p>
-        </div>
-      </div>
-      <p><button id="plan-run">Plan the upgrade</button></p>
-      <div id="plan-result"></div>
     </section>
   </main>
+
+  <div id="peek" class="peek hidden" role="tooltip"></div>
 
   <script src="vendor/mermaid.min.js"></script>
   <script src="app.js"></script>

@@ -313,3 +313,130 @@ func TestHealthReflectsCacheState(t *testing.T) {
 		t.Errorf("expected 503 with an empty cache, got %d", rec.Code)
 	}
 }
+
+// The stack map is the main view. Its layers must run bottom-up, vCenter must not be
+// collapsed by patch (the patch letter changes what a release supports), and ESX must
+// not be a layer at all.
+func TestStackMapLayers(t *testing.T) {
+	body := get(t, testServer(t), "/api/stackmap")
+	layers := body["layers"].([]any)
+
+	var keys []string
+	for _, l := range layers {
+		keys = append(keys, l.(map[string]any)["key"].(string))
+	}
+	want := []string{"vcenter", "supervisor", "vks", "vkr"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Errorf("layers = %v, want %v (bottom-up, no ESX layer)", keys, want)
+	}
+}
+
+// ESX rides along on the vCenter node rather than occupying a row, so the base node has
+// to say which hosts it runs on.
+func TestStackMapAnnotatesVCenterWithHosts(t *testing.T) {
+	body := get(t, testServer(t), "/api/stackmap")
+	base := body["layers"].([]any)[0].(map[string]any)
+	nodes := base["nodes"].([]any)
+	if len(nodes) == 0 {
+		t.Fatal("expected at least one vCenter node")
+	}
+	first := nodes[0].(map[string]any)
+
+	// The visible annotation is collapsed to host lines, because a vCenter release can
+	// run nineteen host patches and listing them all is unreadable.
+	if detail, _ := first["detail"].(string); detail != "9.0" {
+		t.Errorf("expected the collapsed host line on the vCenter node, got %q", detail)
+	}
+	// The exact list stays on the node for the hover.
+	hosts, _ := first["hosts"].([]any)
+	if len(hosts) == 0 || hosts[0].(string) != "9.0.0.0" {
+		t.Errorf("expected the exact host releases to remain available, got %v", hosts)
+	}
+}
+
+// Pinning must narrow the upper layers, and "lit" has to mean a complete stack exists —
+// so the pinned node itself is always lit.
+func TestStackMapPinNarrows(t *testing.T) {
+	h := testServer(t)
+	all := get(t, h, "/api/stackmap")
+	if _, pinned := all["lit"]; pinned {
+		t.Error("nothing should be lit before a pin")
+	}
+
+	body := get(t, h, "/api/stackmap?product=vcenter&version=9.0.0.0")
+	litAny, ok := body["lit"].([]any)
+	if !ok || len(litAny) == 0 {
+		t.Fatalf("expected a lit set for a pinned vCenter, got %v", body["lit"])
+	}
+	lit := map[string]bool{}
+	for _, v := range litAny {
+		lit[v.(string)] = true
+	}
+	if !lit["vcenter:9.0.0.0"] {
+		t.Error("the pinned node must be lit")
+	}
+	if body["recommended"] == nil {
+		t.Error("expected a recommended stack alongside a pin")
+	}
+
+	// Every lit node must belong to a layer that exists.
+	for id := range lit {
+		product, _, found := strings.Cut(id, ":")
+		if !found {
+			t.Errorf("malformed lit id %q", id)
+			continue
+		}
+		if _, ok := model.ByKey(product); !ok {
+			t.Errorf("lit id %q names an unknown product", id)
+		}
+		if product == "esx" {
+			t.Errorf("ESX is not a layer, so %q should not be lit", id)
+		}
+	}
+}
+
+func TestStackMapRejectsUnknownPin(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testServer(t).ServeHTTP(rec,
+		httptest.NewRequest(http.MethodGet, "/api/stackmap?product=vcenter&version=1.2.3", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a version that does not exist, got %d", rec.Code)
+	}
+}
+
+// The map draws connectors between adjacent layers only, and only between lit nodes —
+// an edge that skips a layer or lands on a faded node would be a lie about the stack.
+func TestStackMapEdges(t *testing.T) {
+	body := get(t, testServer(t), "/api/stackmap?product=vcenter&version=9.0.0.0")
+
+	lit := map[string]bool{}
+	for _, v := range body["lit"].([]any) {
+		lit[v.(string)] = true
+	}
+	edges, ok := body["edges"].([]any)
+	if !ok || len(edges) == 0 {
+		t.Fatalf("expected edges for a pinned selection, got %v", body["edges"])
+	}
+
+	rank := map[string]int{"vcenter": 0, "supervisor": 1, "vks": 2, "vkr": 3}
+	for _, raw := range edges {
+		e := raw.(map[string]any)
+		from, to := e["from"].(string), e["to"].(string)
+		if !lit[from] || !lit[to] {
+			t.Errorf("edge %s -> %s touches a node that is not lit", from, to)
+		}
+		fp, _, _ := strings.Cut(from, ":")
+		tp, _, _ := strings.Cut(to, ":")
+		if rank[tp]-rank[fp] != 1 {
+			t.Errorf("edge %s -> %s is not between adjacent layers", from, to)
+		}
+	}
+}
+
+// Nothing pinned means nothing to draw: no lit set, and no edges implying a path.
+func TestStackMapHasNoEdgesWithoutAPin(t *testing.T) {
+	body := get(t, testServer(t), "/api/stackmap")
+	if edges, present := body["edges"]; present && edges != nil {
+		t.Errorf("expected no edges before a selection, got %v", edges)
+	}
+}

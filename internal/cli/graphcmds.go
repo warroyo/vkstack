@@ -88,7 +88,15 @@ func newReleasesCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("unknown product %q", args[0])
 			}
-			releases := gr.ReleasesOf(p.ID)
+			// Filter before rendering so --patches applies to every output format,
+			// not just the table.
+			var releases []*graph.Release
+			for _, r := range gr.ReleasesOf(p.ID) {
+				if r.IsPatch() && !patches {
+					continue
+				}
+				releases = append(releases, r)
+			}
 
 			if g.jsonOut {
 				return writeJSON(cmd.OutOrStdout(), releases)
@@ -96,9 +104,6 @@ func newReleasesCmd() *cobra.Command {
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "VERSION\tTYPE\tGA")
 			for _, r := range releases {
-				if r.IsPatch() && !patches {
-					continue
-				}
 				fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Raw, r.ReleaseType, gaDate(r.GADate))
 			}
 			return tw.Flush()

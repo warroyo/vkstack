@@ -32,11 +32,32 @@ go build ./cmd/interop
 | `check --vcenter … --esx …` | Validate a fully pinned stack; exits non-zero if incompatible |
 | `upgrade --from … --to …` | Ordered upgrade steps, grouped into maintenance windows |
 | `products` / `releases` | What is in scope, and which pairs upstream publishes |
-| `serve` | Web UI — local by default, or hosted (see below) |
+| `serve` | Web UI — the stack map, local by default or hosted (see below) |
 | `cache info\|path\|clear` | Inspect or drop the cache |
 
 `--json` and `--csv` work on every read command. Product keys are `vcenter`, `esx`,
 `supervisor`, `vks`, `vkr`.
+
+## The stack map
+
+`interop serve` opens on a layered map of the whole stack, drawn bottom-up: vCenter at
+the base, branching up through Supervisor, VKS and VKr. Pick any version at any layer and
+the map redraws around it, with a list underneath showing every version in every layer,
+lit or faded.
+
+A node is lit — and a connector drawn — only when a **complete valid stack exists**
+containing both it and your selection. Not merely that two products list each other.
+
+Two things are grouped deliberately:
+
+- **vCenter is not collapsed by patch.** 8.0U3 supports Supervisor 1.26–1.28 while 8.0U3k
+  supports 1.31–1.33, so hiding the patch letter would throw away the answer.
+- **ESX is not a layer.** Its release lines are identical to vCenter's and it has no
+  published data against VKS or VKr, so it appears as "on ESX 9.1 · 9.0 · 8.0U3" under
+  each vCenter node instead of a row nobody can branch from.
+
+Releases upstream has not published anything for yet — 9.2.0.0 at the time of writing —
+are marked "no data yet" rather than silently omitted.
 
 ## Hosting a shared instance
 

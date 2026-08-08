@@ -61,6 +61,7 @@ func NewServer(cfg Config) (http.Handler, error) {
 	mux.HandleFunc("POST /api/check", s.handleCheck)
 	mux.HandleFunc("POST /api/plan", s.handlePlan)
 	mux.HandleFunc("GET /api/graph", s.handleGraph)
+	mux.HandleFunc("GET /api/stackmap", s.handleStackMap)
 	mux.HandleFunc("POST /api/refresh", s.handleRefresh)
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	return mux, nil
@@ -201,7 +202,7 @@ type pinsRequest struct {
 func resolve(g *graph.Graph, in map[string]string) (map[int]*graph.Release, error) {
 	out := map[int]*graph.Release{}
 	for key, version := range in {
-		if version == "" {
+		if key == "" || version == "" {
 			continue
 		}
 		r, err := g.Resolve(key, version)

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/warroyo/interop-visualizer/internal/graph"
 	"github.com/warroyo/interop-visualizer/internal/model"
@@ -72,11 +73,16 @@ func testGraph(t *testing.T) *graph.Graph {
 
 func testServer(t *testing.T) http.Handler {
 	t.Helper()
+	return serverWith(t, Config{Refresh: func(func(int, int, string)) error { return nil }})
+}
+
+// serverWith builds a server around the fixture graph, letting a test set only the
+// config fields it cares about.
+func serverWith(t *testing.T, cfg Config) http.Handler {
+	t.Helper()
 	g := testGraph(t)
-	h, err := NewServer(
-		func() (*graph.Graph, error) { return g, nil },
-		func(func(int, int, string)) error { return nil },
-	)
+	cfg.Load = func() (*graph.Graph, error) { return g, nil }
+	h, err := NewServer(cfg)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -238,5 +244,72 @@ func TestUnknownProductIsABadRequest(t *testing.T) {
 	testServer(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/releases?product=nope", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for an unknown product, got %d", rec.Code)
+	}
+}
+
+// A read-only instance must refuse client-triggered refreshes outright: the whole point
+// of hosting one is that visitors cannot make the server call upstream.
+func TestReadOnlyRejectsClientRefresh(t *testing.T) {
+	called := false
+	h := serverWith(t, Config{
+		ReadOnly: true,
+		Refresh:  func(func(int, int, string)) error { called = true; return nil },
+	})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/refresh", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 from a read-only instance, got %d", rec.Code)
+	}
+	if called {
+		t.Error("a read-only instance must not reach the refresher at all")
+	}
+
+	// Reads must still work.
+	if body := get(t, h, "/api/meta"); body["readOnly"] != true {
+		t.Error("expected /api/meta to advertise read-only mode")
+	}
+}
+
+func TestWritableInstanceAllowsRefresh(t *testing.T) {
+	called := false
+	h := serverWith(t, Config{Refresh: func(func(int, int, string)) error { called = true; return nil }})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/refresh", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !called {
+		t.Error("expected the refresher to run")
+	}
+	if !strings.Contains(rec.Body.String(), "event: done") {
+		t.Errorf("expected a done event in the stream, got %q", rec.Body.String())
+	}
+}
+
+func TestMetaAdvertisesRefreshInterval(t *testing.T) {
+	h := serverWith(t, Config{ReadOnly: true, RefreshInterval: 6 * time.Hour})
+	if got := get(t, h, "/api/meta")["refreshInterval"]; got != "6h0m0s" {
+		t.Errorf("expected the refresh interval in meta, got %v", got)
+	}
+}
+
+// Health has to distinguish "up" from "up but serving nothing", or a rollout goes green
+// on an instance with an empty cache.
+func TestHealthReflectsCacheState(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testServer(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 with a populated cache, got %d", rec.Code)
+	}
+
+	empty, err := NewServer(Config{Load: func() (*graph.Graph, error) { return &graph.Graph{}, nil }})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	empty.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 with an empty cache, got %d", rec.Code)
 	}
 }

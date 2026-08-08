@@ -310,8 +310,11 @@ async function boot() {
     return;
   }
 
+  const mode = meta.refreshInterval
+    ? `refreshes every ${meta.refreshInterval}`
+    : (meta.readOnly ? "read-only" : "refresh on demand");
   $("#meta").textContent =
-    `data fetched ${meta.fetchedAt} (${meta.ageHours}h ago) · ` +
+    `data fetched ${meta.fetchedAt} (${meta.ageHours}h ago) · ${mode} · ` +
     meta.products.map((p) => `${p.label} ${p.count}`).join(" · ");
 
   state.products = meta.products;

@@ -15,7 +15,7 @@ import (
 // nodes, so a layout engine buys little, and reusing one renderer keeps the data graph
 // visually consistent with the conceptual whiteboard.
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
-	g, err := s.load()
+	g, err := s.cfg.Load()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return

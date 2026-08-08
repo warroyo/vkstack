@@ -27,20 +27,34 @@ func loadGraph() (*graph.Graph, error) {
 	if err := warnIfStale(db); err != nil {
 		return nil, err
 	}
+	return loadGraphFrom(db)
+}
+
+// loadGraphFrom builds the graph from an already-open cache. `serve` holds one handle for
+// its lifetime rather than opening and migrating the database on every request.
+func loadGraphFrom(db *store.DB) (*graph.Graph, error) {
 	snap, err := db.Load()
 	if err != nil {
 		return nil, err
 	}
+	opts, err := graphOptions()
+	if err != nil {
+		return nil, err
+	}
+	return graph.Load(snap, opts)
+}
 
+// graphOptions turns the global flags into load options.
+func graphOptions() (graph.Options, error) {
 	mins := map[string]string{}
 	for _, mv := range g.minVersions {
 		key, val, ok := strings.Cut(mv, "=")
 		if !ok {
-			return nil, fmt.Errorf("--min-version wants product=version, got %q", mv)
+			return graph.Options{}, fmt.Errorf("--min-version wants product=version, got %q", mv)
 		}
 		mins[strings.TrimSpace(key)] = strings.TrimSpace(val)
 	}
-	return graph.Load(snap, graph.Options{AllVersions: g.allVersions, MinVersions: mins})
+	return graph.Options{AllVersions: g.allVersions, MinVersions: mins}, nil
 }
 
 // statusWord renders a status code the way the interop matrix labels it.

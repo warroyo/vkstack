@@ -24,21 +24,36 @@ type Loader func() (*graph.Graph, error)
 // Refresher pulls fresh data from upstream, reporting progress.
 type Refresher func(progress func(step, total int, message string)) error
 
+// Config describes how this instance should behave.
+type Config struct {
+	Load    Loader
+	Refresh Refresher
+	// ReadOnly rejects client-triggered refreshes. Used for a shared instance, where
+	// visitors should not be able to make the server call upstream.
+	ReadOnly bool
+	// RefreshInterval is the server's own refresh cadence, reported to the UI so it can
+	// say when the data next updates. Zero means refreshes are on demand only.
+	RefreshInterval time.Duration
+}
+
 // Server holds the handlers.
 type Server struct {
-	load    Loader
-	refresh Refresher
+	cfg Config
 }
 
 // NewServer returns an http.Handler serving the UI and API.
-func NewServer(load Loader, refresh Refresher) (http.Handler, error) {
+func NewServer(cfg Config) (http.Handler, error) {
+	if cfg.Load == nil {
+		return nil, fmt.Errorf("a graph loader is required")
+	}
 	sub, err := fs.Sub(assets, "assets")
 	if err != nil {
 		return nil, fmt.Errorf("locating embedded assets: %w", err)
 	}
-	s := &Server{load: load, refresh: refresh}
+	s := &Server{cfg: cfg}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/model", s.handleModel)
 	mux.HandleFunc("GET /api/releases", s.handleReleases)
@@ -71,7 +86,7 @@ type productJSON struct {
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
-	g, err := s.load()
+	g, err := s.cfg.Load()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
@@ -98,17 +113,22 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fetched := time.UnixMilli(g.FetchedAt)
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"products":  products,
 		"pairs":     pairs,
 		"fetchedAt": fetched.Format(time.RFC3339),
 		"ageHours":  int(time.Since(fetched).Hours()),
-	})
+		"readOnly":  s.cfg.ReadOnly,
+	}
+	if s.cfg.RefreshInterval > 0 {
+		resp["refreshInterval"] = s.cfg.RefreshInterval.String()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 	covered := model.DefaultCoverage
-	if g, err := s.load(); err == nil {
+	if g, err := s.cfg.Load(); err == nil {
 		covered = g.Published
 	}
 
@@ -155,7 +175,7 @@ func toReleaseJSON(rs []*graph.Release) []releaseJSON {
 }
 
 func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
-	g, err := s.load()
+	g, err := s.cfg.Load()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
@@ -202,7 +222,7 @@ func decode(r *http.Request) (pinsRequest, error) {
 }
 
 func (s *Server) handleStack(w http.ResponseWriter, r *http.Request) {
-	g, err := s.load()
+	g, err := s.cfg.Load()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
@@ -321,7 +341,7 @@ func statusWord(status int) string {
 }
 
 func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
-	g, err := s.load()
+	g, err := s.cfg.Load()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
@@ -344,7 +364,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
-	g, err := s.load()
+	g, err := s.cfg.Load()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return

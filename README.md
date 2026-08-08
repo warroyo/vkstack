@@ -32,11 +32,37 @@ go build ./cmd/interop
 | `check --vcenter … --esx …` | Validate a fully pinned stack; exits non-zero if incompatible |
 | `upgrade --from … --to …` | Ordered upgrade steps, grouped into maintenance windows |
 | `products` / `releases` | What is in scope, and which pairs upstream publishes |
-| `serve` | Local web UI on 127.0.0.1 |
+| `serve` | Web UI — local by default, or hosted (see below) |
 | `cache info\|path\|clear` | Inspect or drop the cache |
 
 `--json` and `--csv` work on every read command. Product keys are `vcenter`, `esx`,
 `supervisor`, `vks`, `vkr`.
+
+## Hosting a shared instance
+
+By default `serve` binds `127.0.0.1` and only refreshes when asked, which is what you want
+on a laptop. For a shared instance, bind wider, make it read-only, and let the server keep
+itself current:
+
+```sh
+interop serve --bind 0.0.0.0 --port 8080 --read-only --refresh-interval 6h
+```
+
+- `--read-only` rejects client-triggered refreshes with a 403, so visitors cannot make the
+  server call upstream. Everything else still works — it is read-only to *clients*, while
+  the scheduled refresh keeps writing to the cache.
+- `--refresh-interval` sets the cadence at runtime. A cold cache refreshes immediately on
+  start; a warm one waits for the first tick, so restarts do not hammer upstream. A failed
+  refresh is logged and retried next tick rather than taking the server down — stale data
+  beats no data.
+- `GET /healthz` returns 200 only once the cache actually has data, so a rollout does not
+  go green on an instance that can serve nothing but the model view.
+
+The UI shows the mode and the refresh cadence in its header. The parsed graph is cached in
+memory and reloaded only when the cache's timestamp changes, so a refresh — scheduled, or
+from a separate `interop refresh` against the same cache — is picked up without a restart.
+
+There is no authentication. The data is public, but bind accordingly.
 
 ## Three things worth knowing
 

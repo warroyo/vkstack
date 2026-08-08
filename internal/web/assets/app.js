@@ -85,7 +85,7 @@ async function loadStack() {
 // drawn — the full cross-product is thousands of edges and reads as noise.
 
 const MAP = {
-  nodeH: 30,
+  nodeH: 34,
   padX: 14,       // horizontal padding inside a node box
   gapX: 12,       // gap between sibling nodes
   rowGap: 74,     // vertical distance between layers
@@ -115,7 +115,8 @@ function renderMap() {
   const widths = new Map();
   for (const row of rows) {
     for (const n of row.nodes) {
-      widths.set(n.id, Math.max(52, n.label.length * MAP.charW + MAP.padX * 2));
+      const chars = Math.max(n.label.length, (n.train || "").length);
+      widths.set(n.id, Math.max(52, chars * MAP.charW + MAP.padX * 2));
     }
   }
 
@@ -174,9 +175,20 @@ function renderMap() {
       g.append(svgEl("rect", {
         x: p.x, y: p.y, width: p.w, height: MAP.nodeH, rx: 6, class: "map-node-box",
       }));
-      g.append(svgEl("text", {
-        x: p.cx, y: p.y + MAP.nodeH / 2 + 4, "text-anchor": "middle", class: "map-node-text",
-      }, n.label));
+      if (n.train) {
+        // Two lines: the Kubernetes minor, then the train it ships on. The trains are
+        // not interchangeable, so they must never read as one node.
+        g.append(svgEl("text", {
+          x: p.cx, y: p.y + 13, "text-anchor": "middle", class: "map-node-text",
+        }, n.label));
+        g.append(svgEl("text", {
+          x: p.cx, y: p.y + 24, "text-anchor": "middle", class: "map-node-train",
+        }, n.train));
+      } else {
+        g.append(svgEl("text", {
+          x: p.cx, y: p.y + MAP.nodeH / 2 + 4, "text-anchor": "middle", class: "map-node-text",
+        }, n.label));
+      }
       g.addEventListener("click", () => togglePin(row.layer.key, n));
       g.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); togglePin(row.layer.key, n); }
@@ -258,6 +270,7 @@ function nodeButton(layer, node) {
       onblur: hidePeek,
     },
     label.join(""),
+    node.train ? el("span", { class: "train" }, node.train) : null,
     node.detail
       ? el("span", { class: "detail" },
           layer.key === "vcenter" ? `on ESX ${node.detail}` : node.detail)
@@ -336,6 +349,11 @@ function showPeek(anchor, layer, node) {
     lines.push(...node.releases);
   } else if (node.releases?.length === 1 && node.releases[0] !== node.label) {
     lines.push(node.releases[0]);
+  }
+  if (node.train) {
+    lines.unshift(node.train === "vsc9"
+      ? "Train vsc9 — ships with vCenter 9.x"
+      : `Train ${node.train} — versioned independently of vCenter`);
   }
   if (layer.key === "vcenter" && node.hosts?.length) {
     lines.unshift(`Runs on ESX: ${node.hosts.join(", ")}`);

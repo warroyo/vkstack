@@ -30,7 +30,7 @@ flowchart TD
 ## What each relationship means
 
 - **vCenter → ESX** — vCenter and ESX are upgraded as a pair, and vCenter must be at or ahead of the ESX hosts it manages — so vCenter moves first.
-- **vCenter → Supervisor** — vCenter delivers and manages the Supervisor, and largely determines which Supervisor versions are available — the Supervisor version string embeds the vCenter line it ships with (the "vsc9.1.0.0200" tail).
+- **vCenter → Supervisor** — vCenter delivers and manages the Supervisor, and largely determines which Supervisor versions are available. Watch the "vsc" tail on the Supervisor version: it names the release train. vsc9.x ships with vCenter 9.x ("vsc9.1.0.0200" is literally vCenter 9.1.0.0200); vsc0.x is versioned independently. The same Kubernetes version exists on both trains and they are not interchangeable — Supervisor 1.31 on vsc9 is a different thing from Supervisor 1.31 on vsc0, and a vCenter 8 deployment takes only the latter.
 - **ESX → Supervisor** — The Supervisor control plane and its workloads run on the ESX hosts in the cluster, so the host version gates which Supervisor versions can be enabled.
 - **Supervisor → VKS** — VKS runs on top of the Supervisor and is what turns it into a service that can provision guest Kubernetes clusters.
 - **VKS → VKr** — VKS provisions guest clusters at a specific Kubernetes release; the VKS version declares the Kubernetes minor it serves (the "+v1.36" tail), which is what bounds the usable VKr versions.

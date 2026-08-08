@@ -100,8 +100,12 @@ var Edges = []Edge{
 	{
 		From: "vcenter", To: "supervisor", Label: "manages / delivers",
 		Prose: "vCenter delivers and manages the Supervisor, and largely determines which " +
-			"Supervisor versions are available — the Supervisor version string embeds the " +
-			"vCenter line it ships with (the \"vsc9.1.0.0200\" tail).",
+			"Supervisor versions are available. Watch the \"vsc\" tail on the Supervisor " +
+			"version: it names the release train. vsc9.x ships with vCenter 9.x " +
+			"(\"vsc9.1.0.0200\" is literally vCenter 9.1.0.0200); vsc0.x is versioned " +
+			"independently. The same Kubernetes version exists on both trains and they are " +
+			"not interchangeable — Supervisor 1.31 on vsc9 is a different thing from " +
+			"Supervisor 1.31 on vsc0, and a vCenter 8 deployment takes only the latter.",
 		Primary: true,
 	},
 	{

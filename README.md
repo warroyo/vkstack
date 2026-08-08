@@ -48,7 +48,14 @@ lit or faded.
 A node is lit — and a connector drawn — only when a **complete valid stack exists**
 containing both it and your selection. Not merely that two products list each other.
 
-Two things are grouped deliberately:
+Three things are grouped deliberately:
+
+- **Supervisor is split by release train.** The same Kubernetes version ships on two
+  trains that are *not* interchangeable: `vsc9.x` ships with vCenter 9.x, `vsc0.x` is
+  versioned independently. Supervisor 1.31 on vsc9 will not run on a vCenter 8
+  deployment. Each train is its own node, badged `vsc9` / `vsc0`, so the two never read
+  as one version. Which trains a vCenter accepts comes from the matrix, not a rule —
+  vCenter 9.1.0.0300 accepts both.
 
 - **vCenter is not collapsed by patch.** 8.0U3 supports Supervisor 1.26–1.28 while 8.0U3k
   supports 1.31–1.33, so hiding the patch letter would throw away the answer.

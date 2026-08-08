@@ -411,3 +411,26 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
   font-size: 0.8rem;
   color: var(--faint);
 }
+
+/* Supervisor ships two trains at the same Kubernetes version and they are not
+   interchangeable, so the train is always visible on the node rather than buried. */
+.node .train {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0 0.28rem;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  vertical-align: 0.08em;
+  opacity: 0.85;
+}
+
+.map-node-train {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  fill: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.map-node.is-pinned .map-node-train { fill: rgba(255, 255, 255, 0.82); }

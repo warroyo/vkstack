@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -23,6 +24,27 @@ import (
 // published data against VKS or VKr, so it rides along as an annotation on the vCenter
 // node rather than a row nobody can branch from.
 
+// supervisorTrainRe pulls the "vsc" train out of a Supervisor version, e.g. the "9" in
+// "v1.32.9+vmware.2-fips-vsc9.1.0.0200".
+var supervisorTrainRe = regexp.MustCompile(`-vsc(\d+)\.`)
+
+// supervisorTrain names the release train a Supervisor build belongs to.
+//
+// Supervisor ships on two independent trains at the same Kubernetes version: vsc9.x is
+// bundled with vCenter 9.x, and vsc0.x is versioned on its own. They are NOT
+// interchangeable — Supervisor 1.31 on the vsc9 train does not run on a vCenter 8
+// deployment — so grouping purely by Kubernetes minor would merge two incompatible
+// things into one node and hide the distinction that matters most.
+//
+// Which train a vCenter accepts is left entirely to the matrix: vCenter 9.1.0.0300, for
+// one, accepts both.
+func supervisorTrain(r *graph.Release) string {
+	if m := supervisorTrainRe.FindStringSubmatch(r.Raw); m != nil {
+		return "vsc" + m[1]
+	}
+	return ""
+}
+
 // lineKey groups a release into the unit shown as one node.
 func lineKey(p model.Product, r *graph.Release) string {
 	switch p.Key {
@@ -34,8 +56,16 @@ func lineKey(p model.Product, r *graph.Release) string {
 		if len(r.Version.Key) > 0 && len(r.Version.Key[0]) >= 2 {
 			return fmt.Sprintf("%d.%d", r.Version.Key[0][0], r.Version.Key[0][1])
 		}
+	case "supervisor":
+		// Kubernetes minor *and* train: the two trains are not interchangeable.
+		if minor, ok := version.K8sMinor(r.Version, p); ok {
+			if train := supervisorTrain(r); train != "" {
+				return fmt.Sprintf("1.%d %s", minor, train)
+			}
+			return fmt.Sprintf("1.%d", minor)
+		}
 	default:
-		// Supervisor and VKr group by the Kubernetes minor they carry.
+		// VKr groups by the Kubernetes minor it carries.
 		if minor, ok := version.K8sMinor(r.Version, p); ok {
 			return fmt.Sprintf("1.%d", minor)
 		}
@@ -54,6 +84,9 @@ type mapNode struct {
 	// Hosts are the ESX releases a vCenter node can run on. ESX is not a layer of its
 	// own: its lines mirror vCenter's and it has no data against VKS or VKr.
 	Hosts []string `json:"hosts,omitempty"`
+	// Train is the release train a node belongs to, where a product ships more than
+	// one at the same version. Supervisor has two and they are not interchangeable.
+	Train string `json:"train,omitempty"`
 	// NoData marks a release upstream has published nothing for yet — usually one that
 	// has not shipped. Distinct from "nothing is compatible".
 	NoData bool `json:"noData,omitempty"`
@@ -101,6 +134,12 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 			nodeReleases[id] = members
 
 			node := mapNode{ID: id, Label: line}
+			if p.Key == "supervisor" {
+				if train := supervisorTrain(members[0]); train != "" {
+					node.Label = strings.TrimSuffix(line, " "+train)
+					node.Train = train
+				}
+			}
 			for _, rel := range members {
 				node.Releases = append(node.Releases, rel.Raw)
 			}

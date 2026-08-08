@@ -63,6 +63,7 @@ Start with ` + "`interop explain`" + ` for how the pieces fit together, or
 		newStackCmd(),
 		newCompatCmd(),
 		newCheckCmd(),
+		newUpgradeCmd(),
 		newCacheCmd(),
 	)
 	return root

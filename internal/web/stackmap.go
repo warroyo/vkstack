@@ -28,6 +28,33 @@ import (
 // "v1.32.9+vmware.2-fips-vsc9.1.0.0200".
 var supervisorTrainRe = regexp.MustCompile(`-vsc(\d+)\.`)
 
+// supervisorVSCRe pulls the full delivery version out of a Supervisor release: the
+// "9.1.0.0200" in "v1.32.9+vmware.2-fips-vsc9.1.0.0200".
+var supervisorVSCRe = regexp.MustCompile(`-vsc([\d.]+)`)
+
+// supervisorVSC names the vSphere release that delivered a Supervisor build.
+//
+// This is the dimension that explains why one vCenter lists several Supervisor releases
+// of the same Kubernetes minor. It is not several patches of one thing: for a given
+// vCenter and a given delivery, there is exactly one Kubernetes patch per minor. The
+// list is the same minor as shipped by successive vSphere releases, all still supported
+// because Supervisor does not have to move when vCenter does.
+func supervisorVSC(r *graph.Release) string {
+	if m := supervisorVSCRe.FindStringSubmatch(r.Raw); m != nil {
+		return strings.TrimRight(m[1], ".")
+	}
+	return ""
+}
+
+// k8sPatch renders the Kubernetes version a Supervisor build carries, e.g. "1.30.14".
+func k8sPatch(r *graph.Release) string {
+	if len(r.Version.Key) > 0 && len(r.Version.Key[0]) >= 3 {
+		k := r.Version.Key[0]
+		return fmt.Sprintf("%d.%d.%d", k[0], k[1], k[2])
+	}
+	return r.Raw
+}
+
 // supervisorTrain names the release train a Supervisor build belongs to.
 //
 // Supervisor ships on two independent trains at the same Kubernetes version: vsc9.x is
@@ -191,7 +218,13 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		resp["lit"] = keysOf(lit)
-		narrowNodes(layers, viable)
+		pinnedVCenter := ""
+		if vc, ok := model.ByKey("vcenter"); ok {
+			if rel, pinned := pins[vc.ID]; pinned {
+				pinnedVCenter = rel.Raw
+			}
+		}
+		narrowNodes(layers, viable, pinnedVCenter)
 		resp["edges"] = adjacentEdges(g, pins, order, layers, lit, nodeReleases)
 
 		// The exact hosts for the pinned vCenter, so the base node can state them.
@@ -211,7 +244,7 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 
 // narrowNodes rewrites each lit node to hold only the releases that work with the
 // current pin, so a build count never claims more support than the matrix gives.
-func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release) {
+func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release, pinnedVCenter string) {
 	for li := range layers {
 		for ni := range layers[li].Nodes {
 			node := &layers[li].Nodes[ni]
@@ -227,15 +260,89 @@ func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release) {
 			switch {
 			case layers[li].Key == "vcenter":
 				// vCenter nodes are single releases and keep their ESX annotation.
+			case layers[li].Key == "supervisor":
+				node.Detail, node.Releases = describeSupervisor(rels, pinnedVCenter)
 			case len(node.Releases) < total:
-				node.Detail = fmt.Sprintf("%d of %d builds", len(node.Releases), total)
+				node.Detail = fmt.Sprintf("%d of %d versions", len(node.Releases), total)
 			case len(node.Releases) > 1:
-				node.Detail = fmt.Sprintf("%d builds", len(node.Releases))
+				node.Detail = fmt.Sprintf("%d versions", len(node.Releases))
 			default:
 				node.Detail = ""
 			}
 		}
 	}
+}
+
+// describeSupervisor explains a Supervisor node in the terms that actually apply.
+//
+// Several entries under one Kubernetes minor are not competing patches — each is the
+// minor as delivered by a different vSphere release. The one whose delivery matches the
+// selected vCenter is what that vCenter ships; the rest are older deliveries you are
+// allowed to keep running. Ordered with the shipped one first.
+func describeSupervisor(rels []*graph.Release, pinnedVCenter string) (string, []string) {
+	type entry struct {
+		release *graph.Release
+		vsc     string
+		ships   bool
+	}
+	entries := make([]entry, 0, len(rels))
+	shipped := -1
+	for _, r := range rels {
+		vsc := supervisorVSC(r)
+		e := entry{release: r, vsc: vsc, ships: pinnedVCenter != "" && vsc == pinnedVCenter}
+		if e.ships {
+			shipped = len(entries)
+		}
+		entries = append(entries, e)
+	}
+	if shipped > 0 {
+		entries[0], entries[shipped] = entries[shipped], entries[0]
+	}
+
+	labels := make([]string, 0, len(entries))
+	for _, e := range entries {
+		switch {
+		case e.ships:
+			labels = append(labels, fmt.Sprintf("%s — ships with vCenter %s", e.release.Raw, e.vsc))
+		case e.vsc != "":
+			labels = append(labels, fmt.Sprintf("%s — delivered by %s", e.release.Raw, e.vsc))
+		default:
+			labels = append(labels, e.release.Raw)
+		}
+	}
+
+	// Where every delivery carries the same Kubernetes patch, say the patch once. It is
+	// one Supervisor version shipped in several bundles, not a choice between patches,
+	// and reading it as the latter is the easiest mistake to make here.
+	onePatch := ""
+	for i, e := range entries {
+		p := k8sPatch(e.release)
+		if i == 0 {
+			onePatch = p
+		} else if p != onePatch {
+			onePatch = ""
+			break
+		}
+	}
+
+	var detail string
+	switch {
+	case len(entries) == 0:
+		detail = ""
+	case len(entries) == 1:
+		detail = k8sPatch(entries[0].release)
+		if entries[0].ships {
+			detail += " · ships with this vCenter"
+		}
+	case entries[0].ships:
+		detail = fmt.Sprintf("%s · ships with this vCenter, %d older still supported",
+			k8sPatch(entries[0].release), len(entries)-1)
+	case onePatch != "":
+		detail = fmt.Sprintf("%s · in %d releases", onePatch, len(entries))
+	default:
+		detail = fmt.Sprintf("%d deliveries", len(entries))
+	}
+	return detail, labels
 }
 
 // adjacentEdges finds the connections to draw between neighbouring layers.

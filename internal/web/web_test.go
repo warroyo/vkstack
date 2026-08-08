@@ -502,10 +502,11 @@ func TestStackMapNarrowsBuildCountsToThePin(t *testing.T) {
 	if len(releases) != 1 {
 		t.Errorf("with a pin the node should list only the compatible build, got %v", releases)
 	}
-	if releases[0].(string) != "v1.33.0+vmware.1-fips-vsc9.0.0.0" {
-		t.Errorf("wrong build survived the pin: %v", releases[0])
+	// Supervisor entries are labelled with the vSphere release that delivered them.
+	if got := releases[0].(string); !strings.HasPrefix(got, "v1.33.0+vmware.1-fips-vsc9.0.0.0") {
+		t.Errorf("wrong build survived the pin: %v", got)
 	}
-	if detail, _ := after["detail"].(string); detail != "1 of 2 builds" {
-		t.Errorf("detail = %q, want \"1 of 2 builds\" so the narrowing is visible", detail)
+	if detail, _ := after["detail"].(string); detail != "1.33.0 · ships with this vCenter" {
+		t.Errorf("detail = %q, want the surviving build named", detail)
 	}
 }

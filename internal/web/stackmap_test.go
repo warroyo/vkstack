@@ -53,3 +53,45 @@ func TestNonSupervisorProductsHaveNoTrain(t *testing.T) {
 		t.Errorf("vCenter must not be collapsed, got %q", got)
 	}
 }
+
+// Several entries under one Supervisor minor are the same minor delivered by different
+// vSphere releases, not competing patches. Verified against the live matrix: for a given
+// vCenter and a given delivery there is exactly one Kubernetes patch per minor. The node
+// text has to say that, because reading the list as a choice between patches is the
+// easiest mistake to make here.
+func TestSupervisorDetailNamesDeliveriesNotPatches(t *testing.T) {
+	rels := []*graph.Release{
+		supRelease("v1.30.14+vmware.8-fips-vsc9.1.0.0"),
+		supRelease("v1.30.10+vmware.1-fips-vsc9.0.1.0"),
+		supRelease("v1.30.5+vmware.4-fips-vsc9.0.0.0"),
+	}
+
+	detail, labels := describeSupervisor(rels, "9.1.0.0")
+	if detail != "1.30.14 · ships with this vCenter, 2 older still supported" {
+		t.Errorf("detail = %q", detail)
+	}
+	if len(labels) != 3 || labels[0] != "v1.30.14+vmware.8-fips-vsc9.1.0.0 — ships with vCenter 9.1.0.0" {
+		t.Errorf("expected the shipped build first and labelled, got %v", labels)
+	}
+
+	// The build that ships with the pin leads even when it is not first in the input.
+	detail, labels = describeSupervisor(rels, "9.0.0.0")
+	if detail != "1.30.5 · ships with this vCenter, 2 older still supported" {
+		t.Errorf("detail with an older pin = %q", detail)
+	}
+	if labels[0] != "v1.30.5+vmware.4-fips-vsc9.0.0.0 — ships with vCenter 9.0.0.0" {
+		t.Errorf("expected the matching delivery promoted, got %q", labels[0])
+	}
+}
+
+// Two async deliveries of the identical Kubernetes patch must not read as two patches.
+func TestSupervisorDetailCollapsesOneK8sPatch(t *testing.T) {
+	rels := []*graph.Release{
+		supRelease("v1.32.9+vmware.2-fips-vsc0.1.15"),
+		supRelease("v1.32.9+vmware.2-fips-vsc0.1.14"),
+	}
+	detail, _ := describeSupervisor(rels, "8.0U3k")
+	if detail != "1.32.9 · in 2 releases" {
+		t.Errorf("detail = %q, want the single patch named once", detail)
+	}
+}

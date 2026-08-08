@@ -45,8 +45,13 @@ the base, branching up through Supervisor, VKS and VKr. Pick any version at any 
 the map redraws around it, with a list underneath showing every version in every layer,
 lit or faded.
 
-A node is lit — and a connector drawn — only when a **complete valid stack exists**
-containing both it and your selection. Not merely that two products list each other.
+**The matrix is the source of truth.** If it lists two versions as compatible, the map
+shows that — always. A node is lit whenever the matrix lists it against your selection.
+
+Connectors answer a stronger question: can you build a whole stack around both? Some
+pairs are listed compatible with nothing to bridge them — vCenter 9.0.0.0 and VKS 3.7 are
+listed together, but no Supervisor works with both. Those nodes stay lit and are marked
+"no full stack" with no connector, rather than being hidden.
 
 Three things are grouped deliberately:
 

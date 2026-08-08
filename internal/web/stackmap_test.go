@@ -130,3 +130,45 @@ func TestSupervisorMultipleK8sPatchesUnderOneMinor(t *testing.T) {
 		t.Errorf("detail = %q, want the count and the newest patch", detail)
 	}
 }
+
+// The matrix is the source of truth. If it lists two versions as compatible, the map
+// must show that — even when no intermediate version bridges them into a whole stack.
+// Hiding such a node would contradict the matrix; it is lit and flagged instead.
+func TestMatrixCompatibilityIsNeverHidden(t *testing.T) {
+	h := testServer(t)
+	body := get(t, h, "/api/stackmap?product=vcenter&version=9.0.0.0")
+
+	lit := map[string]bool{}
+	for _, v := range body["lit"].([]any) {
+		lit[v.(string)] = true
+	}
+	incomplete := map[string]bool{}
+	for _, v := range body["incomplete"].([]any) {
+		incomplete[v.(string)] = true
+	}
+
+	// VKr 1.20 is listed against this vCenter but no VKS reaches it, so no whole stack
+	// can contain it. It must still be lit — hiding it would contradict the matrix.
+	if !lit["vkr:1.20"] {
+		t.Error("a version the matrix lists as compatible must be lit even with no whole stack")
+	}
+	if !incomplete["vkr:1.20"] {
+		t.Error("expected it flagged as unable to complete a stack")
+	}
+
+	// A version that does complete a stack must not carry that flag.
+	if !lit["vkr:1.36"] {
+		t.Fatal("expected the stackable VKr to be lit")
+	}
+	if incomplete["vkr:1.36"] {
+		t.Error("a version that completes a stack must not be flagged")
+	}
+
+	// Connectors show buildable paths, so the unstackable node has none.
+	for _, raw := range body["edges"].([]any) {
+		e := raw.(map[string]any)
+		if e["to"] == "vkr:1.20" || e["from"] == "vkr:1.20" {
+			t.Errorf("unstackable node should have no connector, got %v", e)
+		}
+	}
+}

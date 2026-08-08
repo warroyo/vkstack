@@ -114,6 +114,9 @@ type mapNode struct {
 	// Train is the release train a node belongs to, where a product ships more than
 	// one at the same version. Supervisor has two and they are not interchangeable.
 	Train string `json:"train,omitempty"`
+	// Incomplete marks a node the matrix calls compatible with the selection, but which
+	// cannot form a whole stack with it — no intermediate version bridges the two.
+	Incomplete bool `json:"incomplete,omitempty"`
 	// NoData marks a release upstream has published nothing for yet — usually one that
 	// has not shipped. Distinct from "nothing is compatible".
 	NoData bool `json:"noData,omitempty"`
@@ -200,24 +203,61 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(pins) > 0 {
-		// ViableOptions gives the exact releases that can appear in a complete stack
-		// with the pin. Keep them per node: a line can hold five builds while only two
-		// of them work with the selected vCenter, and reporting the line total there
-		// would overstate what is actually supported.
-		lit := map[string]bool{}
-		viable := map[string][]*graph.Release{}
+		// Two different questions, and the matrix answers the first one.
+		//
+		//   1. Is this compatible with what I picked?  The matrix says so directly, and
+		//      that answer is authoritative — it is never overridden here.
+		//   2. Can I build a whole stack around both?  Derived, and a strictly stronger
+		//      claim: vCenter 9.0.0.0 and VKS 3.7 are listed compatible, but no
+		//      Supervisor bridges them.
+		//
+		// Everything the matrix calls compatible stays lit. Where a complete stack does
+		// not exist, the node is flagged rather than dropped.
+		stackable := map[string][]*graph.Release{}
 		for pid, rels := range g.ViableOptions(pins, graph.StackOptions{IncludePatches: true}) {
 			p, _ := model.ByID(pid)
 			if p.Key == "esx" {
 				continue
 			}
 			for _, rel := range rels {
+				stackable[p.Key+":"+lineKey(p, rel)] = append(
+					stackable[p.Key+":"+lineKey(p, rel)], rel)
+			}
+		}
+
+		lit := map[string]bool{}
+		viable := map[string][]*graph.Release{}
+		incomplete := map[string]bool{}
+		for _, p := range model.Products {
+			if p.Key == "esx" {
+				continue
+			}
+			if pinned, isPin := pins[p.ID]; isPin {
+				id := p.Key + ":" + lineKey(p, pinned)
+				lit[id] = true
+				viable[id] = []*graph.Release{pinned}
+				continue
+			}
+			for _, rel := range g.ReleasesOf(p.ID) {
 				id := p.Key + ":" + lineKey(p, rel)
+				if !compatibleWithAllPins(g, rel, pins) {
+					continue
+				}
 				lit[id] = true
 				viable[id] = append(viable[id], rel)
 			}
+			// A line is only "no complete stack" when none of its releases can form one.
+			for id := range lit {
+				if strings.HasPrefix(id, p.Key+":") && len(stackable[id]) == 0 {
+					incomplete[id] = true
+				}
+			}
 		}
+
 		resp["lit"] = keysOf(lit)
+		if len(incomplete) > 0 {
+			resp["incomplete"] = keysOf(incomplete)
+		}
 		pinnedVCenter := ""
 		if vc, ok := model.ByKey("vcenter"); ok {
 			if rel, pinned := pins[vc.ID]; pinned {
@@ -225,7 +265,19 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		narrowNodes(layers, viable, pinnedVCenter)
-		resp["edges"] = adjacentEdges(g, pins, order, layers, lit, nodeReleases)
+		// Connectors show buildable paths, so they use the stronger test. A node the
+		// matrix calls compatible but that cannot complete a stack is lit with no
+		// connector, which is exactly what it is.
+		stackLit := map[string]bool{}
+		for id := range stackable {
+			stackLit[id] = true
+		}
+		for _, p := range model.Products {
+			if pinned, isPin := pins[p.ID]; isPin {
+				stackLit[p.Key+":"+lineKey(p, pinned)] = true
+			}
+		}
+		resp["edges"] = adjacentEdges(g, pins, order, layers, stackLit, nodeReleases)
 
 		// The exact hosts for the pinned vCenter, so the base node can state them.
 		if best, _ := g.Stacks(pins, graph.StackOptions{Limit: 1, IncludePatches: true}); len(best) > 0 {
@@ -240,6 +292,25 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// compatibleWithAllPins reports whether the matrix lists a release as compatible with
+// every pinned release. Pairs upstream does not publish cannot rule anything out, so
+// they are skipped and reported separately as inferred.
+func compatibleWithAllPins(g *graph.Graph, r *graph.Release, pins map[int]*graph.Release) bool {
+	for pid, pinned := range pins {
+		if pid == r.ProductID {
+			continue
+		}
+		if !g.Published(r.ProductID, pid) {
+			continue
+		}
+		status, ok := g.Status(r.ID, pinned.ID)
+		if !ok || !graph.Compatible(status) {
+			return false
+		}
+	}
+	return true
 }
 
 // narrowNodes rewrites each lit node to hold only the releases that work with the

@@ -478,3 +478,16 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 .unknown p { margin: 0 0 0.4rem; font-size: 0.88rem; color: var(--muted); max-width: 76ch; }
 .unknown p:last-child { margin-bottom: 0; }
 .unknown strong { color: var(--ink); }
+
+/* Compatible per the matrix, but no intermediate version bridges it into a whole stack.
+   Shown, never hidden — the matrix is the source of truth — but visibly qualified. */
+.node.nostack {
+  border-style: dashed;
+  border-color: var(--warn);
+}
+
+.map-node.is-nostack .map-node-box {
+  stroke: var(--warn);
+  stroke-dasharray: 4 3;
+  fill: var(--panel);
+}

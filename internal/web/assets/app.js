@@ -10,6 +10,7 @@ const state = {
   pin: null,          // { product, version }
   recommended: null,
   edges: [],          // connections between adjacent layers, for the current selection
+  incomplete: new Set(), // lit per the matrix, but no whole stack contains it
   baseCounts: {},     // layer key -> total node count, for the narrowing readout
 };
 
@@ -70,6 +71,7 @@ async function loadStack() {
   state.lit = data.lit ? new Set(data.lit) : null;
   state.recommended = data.recommended || null;
   state.edges = data.edges || [];
+  state.incomplete = new Set(data.incomplete || []);
   for (const layer of data.layers) state.baseCounts[layer.key] ??= layer.nodes.length;
 
   renderMap();
@@ -207,6 +209,7 @@ function renderMap() {
 
 function nodeMapClass(layer, node) {
   const classes = ["map-node"];
+  if (state.incomplete.has(node.id)) classes.push("is-nostack");
   if (state.pin && state.pin.product === layer.key && state.pin.version === pinVersionFor(node)) {
     classes.push("is-pinned");
   } else if (isRecommended(layer.key, node)) {
@@ -251,6 +254,7 @@ function nodeButton(layer, node) {
 
   const classes = ["node"];
   if (node.noData) classes.push("nodata");
+  if (state.incomplete.has(node.id)) classes.push("nostack");
   if (pinned) classes.push("pinned");
   else if (state.lit && lit) classes.push("lit");
   else if (state.lit) classes.push("dim");
@@ -258,6 +262,7 @@ function nodeButton(layer, node) {
 
   const label = [node.label];
   if (node.noData) label.push(" · no data yet");
+  else if (state.incomplete.has(node.id)) label.push(" · no full stack");
 
   const button = el("button", {
       class: classes.join(" "),
@@ -349,6 +354,10 @@ function showPeek(anchor, layer, node) {
     lines.push(...node.releases);
   } else if (node.releases?.length === 1 && node.releases[0] !== node.label) {
     lines.push(node.releases[0]);
+  }
+  if (state.incomplete.has(node.id)) {
+    lines.unshift("Listed compatible with your selection, but nothing bridges them into " +
+      "a whole stack — no intermediate version works with both.");
   }
   if (node.train) {
     lines.unshift(node.train === "vsc9"

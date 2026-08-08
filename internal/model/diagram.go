@@ -57,12 +57,25 @@ func KnownUnpublishedPairs() [][2]int {
 // nodeID is the mermaid node identifier for a product key.
 func nodeID(key string) string { return strings.ToUpper(key) }
 
+// Backbone reports whether an edge belongs on the on-screen explainer: the conceptual
+// chain, plus the one gap worth knowing about. The direct vCenter-to-VKS and
+// vCenter-to-VKr edges are real and the solver benefits from them, but they describe how
+// the matrix is laid out rather than how the components relate, so they stay in the doc.
+func Backbone(e Edge) bool {
+	return e.Primary || e.Evidence == EvidenceInferred
+}
+
 // Mermaid renders the conceptual model as a mermaid flowchart.
 //
 // Edges whose product pair is not published upstream are drawn dashed and labelled, so
 // the diagram reflects the real state of the data rather than a claim baked in at
 // authoring time. Pass AllPublished when no cache has been loaded.
-func Mermaid(covered Coverage) string {
+func Mermaid(covered Coverage) string { return mermaid(covered, false) }
+
+// MermaidBackbone renders only the conceptual chain, for the on-screen explainer.
+func MermaidBackbone(covered Coverage) string { return mermaid(covered, true) }
+
+func mermaid(covered Coverage, backboneOnly bool) string {
 	var b strings.Builder
 	b.WriteString("flowchart TD\n")
 
@@ -80,6 +93,9 @@ func Mermaid(covered Coverage) string {
 	b.WriteString("\n")
 
 	for _, e := range Edges {
+		if backboneOnly && !Backbone(e) {
+			continue
+		}
 		from, _ := ByKey(e.From)
 		to, _ := ByKey(e.To)
 		published := covered(from.ID, to.ID)
@@ -90,7 +106,7 @@ func Mermaid(covered Coverage) string {
 		case !published:
 			// Unpublished pairs are the ones a reader most needs flagged.
 			arrow = "-.->"
-			label = e.Label + "<br/><i>no data — inferred</i>"
+			label = e.Label + "<br/><i>no published data</i>"
 		case e.Evidence == EvidenceDomain:
 			arrow = "-.->"
 			label = e.Label + "<br/><i>not in the matrix</i>"

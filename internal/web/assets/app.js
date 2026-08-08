@@ -404,39 +404,8 @@ async function loadModel() {
   for (const e of data.edges) {
     list.append(el("li", {},
       el("strong", {}, `${e.from} → ${e.to}`),
-      el("span", { class: `evidence ${e.published ? "known" : "unknown"}` }, e.evidence),
-      ` ${e.prose}`));
-  }
-
-  // Trains get their own callout: it is the fact people most often read past.
-  const trains = $("#model-trains");
-  trains.textContent = "";
-  for (const t of data.trains || []) {
-    trains.append(el("div", { class: "callout" },
-      el("h3", {}, `${t.product} ships ${t.trains.length} trains`),
-      el("p", {},
-        ...t.trains.flatMap((name, i) => [
-          i ? " and " : "",
-          el("code", {}, name),
-        ]),
-        `. ${t.note}`)));
-  }
-
-  const grouping = $("#model-grouping");
-  grouping.textContent = "";
-  for (const note of data.grouping || []) grouping.append(el("li", {}, note));
-
-  const unknowns = $("#model-unknowns");
-  unknowns.textContent = "";
-  for (const u of data.unknowns || []) {
-    unknowns.append(el("div", { class: "unknown" },
-      el("h3", {}, u.title),
-      el("p", {}, u.detail),
-      el("p", { class: "consequence" },
-        el("strong", {}, "What it means: "), u.consequence),
-      u.workaround
-        ? el("p", { class: "workaround" }, el("strong", {}, "What to do: "), u.workaround)
-        : null));
+      ` — ${e.summary}`,
+      e.published ? null : el("span", { class: "unpublished" }, " (inferred)")));
   }
 
   modelLoaded = true;

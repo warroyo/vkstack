@@ -168,8 +168,21 @@ func mermaidWellFormed(t *testing.T, def string) {
 func TestModelDiagramIsWellFormed(t *testing.T) {
 	body := get(t, testServer(t), "/api/model")
 	mermaidWellFormed(t, body["mermaid"].(string))
-	if len(body["edges"].([]any)) != len(model.Edges) {
-		t.Errorf("expected %d edges in the response", len(model.Edges))
+	// The screen carries the conceptual backbone only. The direct vCenter-to-VKS and
+	// vCenter-to-VKr edges describe how the matrix is laid out, not how the components
+	// relate, so they belong in the doc rather than the picture.
+	want := 0
+	for _, e := range model.Edges {
+		if model.Backbone(e) {
+			want++
+		}
+	}
+	got := len(body["edges"].([]any))
+	if got != want {
+		t.Errorf("got %d edges, want the %d backbone edges", got, want)
+	}
+	if got >= len(model.Edges) {
+		t.Error("expected the on-screen explainer to be a subset of the full model")
 	}
 }
 

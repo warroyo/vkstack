@@ -113,7 +113,10 @@ type Edge struct {
 	From  string // product key
 	To    string // product key
 	Label string // short arrow label for the diagram
-	// Prose explains what the dependency actually is, in one sentence.
+	// Summary is the one-line version, for the on-screen explainer. Generic and short:
+	// the shape of the relationship, not its details.
+	Summary string
+	// Prose is the full explanation, for the generated doc and `interop explain`.
 	Prose string
 	// Bidirectional marks a mutual version-pairing constraint rather than a
 	// "this one determines that one" direction.
@@ -133,12 +136,14 @@ type Edge struct {
 var Edges = []Edge{
 	{
 		From: "vcenter", To: "esx", Label: "version pairing",
+		Summary: "Upgraded as a pair. vCenter stays at or ahead of its hosts.",
 		Prose: "vCenter and ESX are upgraded as a pair, and vCenter must be at or ahead " +
 			"of the ESX hosts it manages — so vCenter moves first.",
 		Bidirectional: true, Primary: true, Evidence: EvidencePublished,
 	},
 	{
 		From: "vcenter", To: "supervisor", Label: "manages / delivers",
+		Summary: "vCenter delivers the Supervisor and sets which versions are available.",
 		Prose: "vCenter delivers and manages the Supervisor, and largely determines which " +
 			"Supervisor versions are available. Watch the \"vsc\" tail on the Supervisor " +
 			"version: it names the release train. vsc9.x ships with vCenter 9.x " +
@@ -150,18 +155,21 @@ var Edges = []Edge{
 	},
 	{
 		From: "esx", To: "supervisor", Label: "hosts run it",
+		Summary: "The Supervisor runs on the ESX hosts in the cluster.",
 		Prose: "The Supervisor control plane and its workloads run on the ESX hosts in the " +
 			"cluster, so the host version gates which Supervisor versions can be enabled.",
 		Primary: true, Evidence: EvidencePublished,
 	},
 	{
 		From: "supervisor", To: "vks", Label: "runs",
+		Summary: "VKS runs on the Supervisor and turns it into a cluster service.",
 		Prose: "VKS runs on top of the Supervisor and is what turns it into a service that " +
 			"can provision guest Kubernetes clusters.",
 		Primary: true, Evidence: EvidencePublished,
 	},
 	{
 		From: "vks", To: "vkr", Label: "provisions",
+		Summary: "VKS provisions the guest clusters and bounds their Kubernetes version.",
 		Prose: "VKS provisions guest clusters at a specific Kubernetes release; the VKS " +
 			"version declares the Kubernetes minor it serves (the \"+v1.36\" tail), which " +
 			"is what bounds the usable VKr versions.",
@@ -169,6 +177,7 @@ var Edges = []Edge{
 	},
 	{
 		From: "vcenter", To: "vks", Label: "published directly",
+		Summary: "Checked directly against vCenter.",
 		Prose: "vCenter is the hub of the published matrix and has a direct compatibility " +
 			"edge to VKS, which is what makes it possible to solve a whole stack from a " +
 			"single pinned vCenter version.",
@@ -176,12 +185,14 @@ var Edges = []Edge{
 	},
 	{
 		From: "vcenter", To: "vkr", Label: "published directly",
+		Summary: "Checked directly against vCenter.",
 		Prose: "vCenter also has a direct published edge to VKr, giving a second " +
 			"independent constraint on the guest cluster version.",
 		Evidence: EvidencePublished,
 	},
 	{
-		From: "supervisor", To: "vkr", Label: "inferred via VKS",
+		From: "supervisor", To: "vkr", Label: "via VKS",
+		Summary: "No published data — worked out through VKS.",
 		Prose: "There is no published Supervisor-to-VKr data upstream. The relationship is " +
 			"real but has to be inferred through VKS and vCenter, so this tool reports it " +
 			"as inferred rather than verified.",

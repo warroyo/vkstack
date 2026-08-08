@@ -19,7 +19,7 @@ flowchart TD
     VKS -->|"provisions"| VKR
     VCENTER -.->|"published directly"| VKS
     VCENTER -.->|"published directly"| VKR
-    SUPERVISOR -.->|"inferred via VKS<br/><i>no data — inferred</i>"| VKR
+    SUPERVISOR -.->|"via VKS<br/><i>no published data</i>"| VKR
 
     classDef base fill:#e8f0fe,stroke:#4a6fa5,stroke-width:3px,color:#12263f
     classDef k8s fill:#eaf6ec,stroke:#4a8a5c,stroke-width:3px,color:#12331c

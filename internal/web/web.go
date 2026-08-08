@@ -134,66 +134,30 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type edgeJSON struct {
-		From      string `json:"from"`
-		To        string `json:"to"`
-		Label     string `json:"label"`
-		Prose     string `json:"prose"`
-		Published bool   `json:"published"`
-		// Evidence says how the claim is known, so an asserted rule is never presented
-		// with the same weight as a matrix lookup.
-		Evidence string `json:"evidence"`
+		From    string `json:"from"`
+		To      string `json:"to"`
+		Summary string `json:"summary"`
+		// Published is the only qualifier the screen carries. Everything else about how
+		// a claim is known lives in docs/model.md and `interop explain`; this view is a
+		// picture of the relationships, not a reference page.
+		Published bool `json:"published"`
 	}
 	var edges []edgeJSON
 	for _, e := range model.Edges {
+		if !model.Backbone(e) {
+			continue
+		}
 		from, _ := model.ByKey(e.From)
 		to, _ := model.ByKey(e.To)
-		published := covered(from.ID, to.ID)
-		evidence := e.Evidence
-		if evidence == "" {
-			evidence = model.EvidenceDomain
-		}
-		if !published {
-			evidence = model.EvidenceInferred
-		}
 		edges = append(edges, edgeJSON{
-			From: from.Label, To: to.Label, Label: e.Label, Prose: e.Prose,
-			Published: published, Evidence: evidence.Describe(),
+			From: from.Label, To: to.Label, Summary: e.Summary,
+			Published: covered(from.ID, to.ID),
 		})
-	}
-
-	type unknownJSON struct {
-		Title       string `json:"title"`
-		Detail      string `json:"detail"`
-		Consequence string `json:"consequence"`
-		Workaround  string `json:"workaround,omitempty"`
-	}
-	var unknowns []unknownJSON
-	for _, u := range model.Unknowns(covered) {
-		unknowns = append(unknowns, unknownJSON{
-			Title: u.Title, Detail: u.Detail,
-			Consequence: u.Consequence, Workaround: u.Workaround,
-		})
-	}
-
-	type trainJSON struct {
-		Product string   `json:"product"`
-		Trains  []string `json:"trains"`
-		Note    string   `json:"note"`
-	}
-	var trains []trainJSON
-	for _, p := range model.Products {
-		if len(p.Trains) > 0 {
-			trains = append(trains, trainJSON{Product: p.Label, Trains: p.Trains, Note: p.TrainNote})
-		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mermaid":      model.Mermaid(covered),
-		"edges":        edges,
-		"upgradeOrder": model.UpgradeOrder(),
-		"trains":       trains,
-		"grouping":     model.GroupingNotes(),
-		"unknowns":     unknowns,
+		"mermaid": model.MermaidBackbone(covered),
+		"edges":   edges,
 	})
 }
 

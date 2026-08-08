@@ -19,6 +19,15 @@ func TestEveryEdgeNamesRealProducts(t *testing.T) {
 		if strings.TrimSpace(e.Prose) == "" {
 			t.Errorf("edge %s->%s has no prose; the whole point is explaining why", e.From, e.To)
 		}
+		// The on-screen explainer shows only the summary, so an edge without one would
+		// render as a bare arrow with no explanation at all.
+		if strings.TrimSpace(e.Summary) == "" {
+			t.Errorf("edge %s->%s has no summary for the on-screen explainer", e.From, e.To)
+		}
+		if len(e.Summary) > 90 {
+			t.Errorf("edge %s->%s summary is %d chars; that view is a picture, not a doc",
+				e.From, e.To, len(e.Summary))
+		}
 	}
 }
 
@@ -95,11 +104,11 @@ func TestMermaidDeclaresEveryReferencedNode(t *testing.T) {
 // main thing the diagram teaches beyond the box layout.
 func TestMermaidMarksUnpublishedPairs(t *testing.T) {
 	out := Mermaid(DefaultCoverage)
-	if !strings.Contains(out, "no data") {
+	if !strings.Contains(out, "no published data") {
 		t.Error("expected unpublished pairs to be flagged in the diagram")
 	}
 	// With everything published, that flag must disappear.
-	if strings.Contains(Mermaid(AllPublished), "no data") {
+	if strings.Contains(Mermaid(AllPublished), "no published data") {
 		t.Error("with full coverage no edge should claim to be missing data")
 	}
 }

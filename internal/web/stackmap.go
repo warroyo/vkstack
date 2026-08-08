@@ -275,10 +275,15 @@ func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release, pinnedVC
 
 // describeSupervisor explains a Supervisor node in the terms that actually apply.
 //
-// Several entries under one Kubernetes minor are not competing patches — each is the
-// minor as delivered by a different vSphere release. The one whose delivery matches the
-// selected vCenter is what that vCenter ships; the rest are older deliveries you are
-// allowed to keep running. Ordered with the shipped one first.
+// Supervisor releases out of band from vCenter, so one vCenter can support several
+// Supervisor versions of the same Kubernetes minor. They differ along two axes: the
+// Kubernetes patch, and the vSphere release that delivered them. Both vary — vCenter
+// 9.1.0.0 takes Supervisor 1.30 at patches 1.30.5, 1.30.10 and 1.30.14.
+//
+// Deliveries are not necessarily older than the selected vCenter either: vCenter 9.0.2.0
+// supports Supervisor delivered by 9.0.2.0100, a later vCenter patch. So entries are
+// described by which release delivered them and nothing is claimed about their age. The
+// one matching the selected vCenter's own delivery leads, since that is what it ships.
 func describeSupervisor(rels []*graph.Release, pinnedVCenter string) (string, []string) {
 	type entry struct {
 		release *graph.Release
@@ -335,12 +340,13 @@ func describeSupervisor(rels []*graph.Release, pinnedVCenter string) (string, []
 			detail += " · ships with this vCenter"
 		}
 	case entries[0].ships:
-		detail = fmt.Sprintf("%s · ships with this vCenter, %d older still supported",
+		detail = fmt.Sprintf("%s · ships with this vCenter, %d more supported",
 			k8sPatch(entries[0].release), len(entries)-1)
 	case onePatch != "":
 		detail = fmt.Sprintf("%s · in %d releases", onePatch, len(entries))
 	default:
-		detail = fmt.Sprintf("%d deliveries", len(entries))
+		// Genuinely different Kubernetes patches, because Supervisor ships out of band.
+		detail = fmt.Sprintf("%d versions · newest %s", len(entries), k8sPatch(entries[0].release))
 	}
 	return detail, labels
 }

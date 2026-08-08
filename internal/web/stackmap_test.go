@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/warroyo/interop-visualizer/internal/graph"
@@ -67,7 +68,7 @@ func TestSupervisorDetailNamesDeliveriesNotPatches(t *testing.T) {
 	}
 
 	detail, labels := describeSupervisor(rels, "9.1.0.0")
-	if detail != "1.30.14 · ships with this vCenter, 2 older still supported" {
+	if detail != "1.30.14 · ships with this vCenter, 2 more supported" {
 		t.Errorf("detail = %q", detail)
 	}
 	if len(labels) != 3 || labels[0] != "v1.30.14+vmware.8-fips-vsc9.1.0.0 — ships with vCenter 9.1.0.0" {
@@ -76,7 +77,7 @@ func TestSupervisorDetailNamesDeliveriesNotPatches(t *testing.T) {
 
 	// The build that ships with the pin leads even when it is not first in the input.
 	detail, labels = describeSupervisor(rels, "9.0.0.0")
-	if detail != "1.30.5 · ships with this vCenter, 2 older still supported" {
+	if detail != "1.30.5 · ships with this vCenter, 2 more supported" {
 		t.Errorf("detail with an older pin = %q", detail)
 	}
 	if labels[0] != "v1.30.5+vmware.4-fips-vsc9.0.0.0 — ships with vCenter 9.0.0.0" {
@@ -93,5 +94,39 @@ func TestSupervisorDetailCollapsesOneK8sPatch(t *testing.T) {
 	detail, _ := describeSupervisor(rels, "8.0U3k")
 	if detail != "1.32.9 · in 2 releases" {
 		t.Errorf("detail = %q, want the single patch named once", detail)
+	}
+}
+
+// Supervisor ships out of band from vCenter, so a supported delivery can be *newer* than
+// the selected vCenter. Nothing may describe the other entries as older.
+func TestSupervisorDeliveriesMayBeNewerThanTheVCenter(t *testing.T) {
+	rels := []*graph.Release{
+		supRelease("v1.32.9+vmware.2-fips-vsc9.0.2.0100"), // delivered by a later vCenter patch
+		supRelease("v1.32.9+vmware.2-fips-vsc9.0.2.0"),
+	}
+	detail, labels := describeSupervisor(rels, "9.0.2.0")
+	if strings.Contains(detail, "older") {
+		t.Errorf("detail %q calls a newer delivery older", detail)
+	}
+	if detail != "1.32.9 · ships with this vCenter, 1 more supported" {
+		t.Errorf("detail = %q", detail)
+	}
+	if labels[0] != "v1.32.9+vmware.2-fips-vsc9.0.2.0 — ships with vCenter 9.0.2.0" {
+		t.Errorf("expected the matching delivery first, got %q", labels[0])
+	}
+}
+
+// Several genuinely different Kubernetes patches under one minor is normal on 9.x, and
+// must not be described as a single version.
+func TestSupervisorMultipleK8sPatchesUnderOneMinor(t *testing.T) {
+	rels := []*graph.Release{
+		supRelease("v1.30.14+vmware.8-fips-vsc9.1.0.0"),
+		supRelease("v1.30.10+vmware.1-fips-vsc9.0.1.0"),
+		supRelease("v1.30.5+vmware.4-fips-vsc9.0.0.0"),
+	}
+	// No delivery matches, so nothing "ships with" the pin.
+	detail, _ := describeSupervisor(rels, "9.0.3.0")
+	if detail != "3 versions · newest 1.30.14" {
+		t.Errorf("detail = %q, want the count and the newest patch", detail)
 	}
 }

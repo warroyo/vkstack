@@ -17,6 +17,12 @@
   --pick: #0b8a5a;
   --pick-soft: #e0f4ec;
   --warn: #b3400f;
+  /* Support lifecycle. Amber for Technical Guidance, muted red for End of Support —
+     both quieter than the indigo path so they qualify a node without competing with it. */
+  --tg: #a3690a;
+  --tg-soft: #fbf0dc;
+  --eos: #9c2b30;
+  --eos-soft: #f7e4e5;
 
   --radius: 7px;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
@@ -37,6 +43,10 @@
     --pick: #3ecf96;
     --pick-soft: #102c22;
     --warn: #f0906a;
+    --tg: #dda94a;
+    --tg-soft: #33290f;
+    --eos: #e8848a;
+    --eos-soft: #331a1c;
   }
 }
 
@@ -491,3 +501,81 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
   stroke-dasharray: 4 3;
   fill: var(--panel);
 }
+
+/* ---- support lifecycle ------------------------------------------------- */
+
+/* The matrix publishes a support phase per release. "Legacy" here means exactly what it
+   means on the interop site: nothing left in General Support. */
+
+.node.phase-technical-guidance {
+  border-color: var(--tg);
+  background: var(--tg-soft);
+}
+
+.node.phase-end-of-support {
+  border-color: var(--eos);
+  background: var(--eos-soft);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--eos) 55%, transparent);
+}
+
+.phase-tag {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0 0.26rem;
+  border-radius: 3px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  vertical-align: 0.1em;
+  text-decoration: none;
+  color: #fff;
+}
+
+.phase-tag.phase-technical-guidance { background: var(--tg); }
+.phase-tag.phase-end-of-support { background: var(--eos); }
+
+.map-node.is-technical-guidance .map-node-box { stroke: var(--tg); fill: var(--tg-soft); }
+.map-node.is-end-of-support .map-node-box { stroke: var(--eos); fill: var(--eos-soft); }
+
+.hidden-count {
+  align-self: center;
+  font-size: 0.72rem;
+  color: var(--faint);
+  font-style: italic;
+}
+
+.toggle {
+  font-size: 0.82rem;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.2rem;
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.legend li { display: flex; align-items: center; gap: 0.4rem; }
+
+.swatch {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 3px;
+  border: 1px solid var(--hair);
+  display: inline-block;
+}
+
+.sw-general { background: var(--signal-soft); border-color: var(--signal); }
+.sw-tg { background: var(--tg-soft); border-color: var(--tg); }
+.sw-eos { background: var(--eos-soft); border-color: var(--eos); }
+.sw-nostack { background: var(--panel); border-color: var(--warn); border-style: dashed; }

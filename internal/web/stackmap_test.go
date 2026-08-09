@@ -9,9 +9,57 @@ import (
 	"github.com/warroyo/interop-visualizer/internal/version"
 )
 
+// supRelease builds a Supervisor release in General Support. The support flags must be
+// set explicitly: a zero-value Release reads as End of Support, since the matrix encodes
+// the phase as two positive flags.
 func supRelease(raw string) *graph.Release {
 	p, _ := model.ByKey("supervisor")
-	return &graph.Release{Raw: raw, ProductKey: "supervisor", Version: version.Parse(raw, p.Scheme)}
+	return &graph.Release{
+		Raw: raw, ProductKey: "supervisor", Version: version.Parse(raw, p.Scheme),
+		TechGuided: true, GenGuided: true,
+	}
+}
+
+// The matrix carries the support phase as two flags. Pin the mapping, including the
+// zero value, so nothing silently reclassifies releases.
+func TestSupportPhaseMapping(t *testing.T) {
+	for _, tc := range []struct {
+		tech, gen bool
+		want      graph.SupportPhase
+	}{
+		{true, true, graph.PhaseGeneral},
+		{true, false, graph.PhaseTechnicalGuidance},
+		{false, false, graph.PhaseEndOfSupport},
+		// genGuided alone still means General Support: it is the stronger flag.
+		{false, true, graph.PhaseGeneral},
+	} {
+		r := graph.Release{TechGuided: tc.tech, GenGuided: tc.gen}
+		if got := r.Phase(); got != tc.want {
+			t.Errorf("tech=%v gen=%v -> %q, want %q", tc.tech, tc.gen, got, tc.want)
+		}
+	}
+	if graph.PhaseGeneral.Supported() != true || graph.PhaseTechnicalGuidance.Supported() {
+		t.Error("only General Support counts as supported")
+	}
+}
+
+// A node takes the best phase among its releases: a line stays usable while any release
+// in it is still generally supported.
+func TestNodePhaseTakesTheBestOfItsReleases(t *testing.T) {
+	general := supRelease("v1.30.14+vmware.8-fips-vsc9.1.0.0")
+	legacy := supRelease("v1.30.5+vmware.4-fips-vsc9.0.0.0")
+	legacy.GenGuided, legacy.TechGuided = false, true
+
+	var node mapNode
+	setPhase(&node, []*graph.Release{legacy, general})
+	if node.Phase != string(graph.PhaseGeneral) || node.Legacy {
+		t.Errorf("mixed line should stay generally supported, got %q legacy=%v", node.Phase, node.Legacy)
+	}
+
+	setPhase(&node, []*graph.Release{legacy})
+	if node.Phase != string(graph.PhaseTechnicalGuidance) || !node.Legacy {
+		t.Errorf("all-legacy line should be flagged, got %q legacy=%v", node.Phase, node.Legacy)
+	}
 }
 
 // Supervisor ships the same Kubernetes version on two trains, and they are not

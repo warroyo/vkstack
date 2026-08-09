@@ -114,6 +114,15 @@ type mapNode struct {
 	// Train is the release train a node belongs to, where a product ships more than
 	// one at the same version. Supervisor has two and they are not interchangeable.
 	Train string `json:"train,omitempty"`
+	// Phase is where this node sits in the support lifecycle: the best phase across the
+	// releases it covers, since a line stays usable while any release in it is still in
+	// General Support.
+	Phase string `json:"phase,omitempty"`
+	// PhaseLabel is Phase rendered for display.
+	PhaseLabel string `json:"phaseLabel,omitempty"`
+	// Legacy marks a node with nothing left in General Support — what the interop
+	// site's "hide legacy releases" checkbox removes.
+	Legacy bool `json:"legacy,omitempty"`
 	// Incomplete marks a node the matrix calls compatible with the selection, but which
 	// cannot form a whole stack with it — no intermediate version bridges the two.
 	Incomplete bool `json:"incomplete,omitempty"`
@@ -164,6 +173,7 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 			nodeReleases[id] = members
 
 			node := mapNode{ID: id, Label: line}
+			setPhase(&node, members)
 			if p.Key == "supervisor" {
 				if train := supervisorTrain(members[0]); train != "" {
 					node.Label = strings.TrimSuffix(line, " "+train)
@@ -328,6 +338,8 @@ func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release, pinnedVC
 			for _, r := range rels {
 				node.Releases = append(node.Releases, r.Raw)
 			}
+			// The surviving releases may sit in a different phase from the full line.
+			setPhase(node, rels)
 			switch {
 			case layers[li].Key == "vcenter":
 				// vCenter nodes are single releases and keep their ESX annotation.
@@ -384,6 +396,9 @@ func describeSupervisor(rels []*graph.Release, pinnedVCenter string) (string, []
 			labels = append(labels, fmt.Sprintf("%s — delivered by %s", e.release.Raw, e.vsc))
 		default:
 			labels = append(labels, e.release.Raw)
+		}
+		if p := e.release.Phase(); !p.Supported() {
+			labels[len(labels)-1] += " · " + p.Label()
 		}
 	}
 
@@ -486,6 +501,31 @@ func stackExistsWith(
 		}
 	}
 	return false
+}
+
+// setPhase records the support lifecycle of a node from the releases behind it.
+//
+// The matrix publishes this per release as two flags, and the interop site's "hide
+// legacy releases" checkbox is exactly these two — so "legacy" here means the same thing
+// it means there: nothing left in General Support.
+//
+// A node takes the best phase among its releases: a version line is still generally
+// supported while any release in it is.
+func setPhase(node *mapNode, members []*graph.Release) {
+	best := graph.PhaseEndOfSupport
+	for _, r := range members {
+		switch r.Phase() {
+		case graph.PhaseGeneral:
+			best = graph.PhaseGeneral
+		case graph.PhaseTechnicalGuidance:
+			if best != graph.PhaseGeneral {
+				best = graph.PhaseTechnicalGuidance
+			}
+		}
+	}
+	node.Phase = string(best)
+	node.PhaseLabel = best.Label()
+	node.Legacy = !best.Supported()
 }
 
 // hostsFor lists the ESX releases compatible with any of the given vCenter releases.

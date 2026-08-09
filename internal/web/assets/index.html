@@ -27,6 +27,10 @@
           stays lit; everything that cannot fades back.
         </p>
         <div class="stack-actions">
+          <label class="toggle">
+            <input type="checkbox" id="hide-legacy" checked>
+            Hide legacy releases
+          </label>
           <span id="pin-label" class="pin-label"></span>
           <button id="clear-pin" class="ghost hidden">Clear</button>
         </div>
@@ -39,6 +43,13 @@
         <div id="map" class="map" role="img" aria-labelledby="map-caption"></div>
         <figcaption id="map-caption" class="map-caption"></figcaption>
       </figure>
+
+      <ul class="legend" id="legend">
+        <li><span class="swatch sw-general"></span>General Support</li>
+        <li><span class="swatch sw-tg"></span>Technical Guidance — no new fixes</li>
+        <li><span class="swatch sw-eos"></span>End of Support</li>
+        <li><span class="swatch sw-nostack"></span>Compatible, but no full stack</li>
+      </ul>
 
       <h2 class="section-label">Every version, by layer</h2>
       <p class="section-note">

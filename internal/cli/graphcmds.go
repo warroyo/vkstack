@@ -74,7 +74,7 @@ func statusWord(status int) string {
 }
 
 func newReleasesCmd() *cobra.Command {
-	var patches bool
+	var patches, legacy bool
 	cmd := &cobra.Command{
 		Use:   "releases <product>",
 		Short: "List a product's releases, oldest first",
@@ -95,6 +95,11 @@ func newReleasesCmd() *cobra.Command {
 				if r.IsPatch() && !patches {
 					continue
 				}
+				// Match the interop site's default: legacy releases are hidden unless
+				// asked for.
+				if !r.Phase().Supported() && !legacy {
+					continue
+				}
 				releases = append(releases, r)
 			}
 
@@ -102,14 +107,17 @@ func newReleasesCmd() *cobra.Command {
 				return writeJSON(cmd.OutOrStdout(), releases)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "VERSION\tTYPE\tGA")
+			fmt.Fprintln(tw, "VERSION\tTYPE\tGA\tSUPPORT")
 			for _, r := range releases {
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Raw, r.ReleaseType, gaDate(r.GADate))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+					r.Raw, r.ReleaseType, gaDate(r.GADate), r.Phase().Label())
 			}
 			return tw.Flush()
 		},
 	}
 	cmd.Flags().BoolVar(&patches, "patches", false, "include patch releases")
+	cmd.Flags().BoolVar(&legacy, "legacy", false,
+		"include releases past General Support (what the interop site calls legacy)")
 	return cmd
 }
 

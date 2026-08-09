@@ -11,6 +11,7 @@ const state = {
   recommended: null,
   edges: [],          // connections between adjacent layers, for the current selection
   incomplete: new Set(), // lit per the matrix, but no whole stack contains it
+  hideLegacy: true,   // mirrors the interop site's own "hide legacy releases" checkbox
   baseCounts: {},     // layer key -> total node count, for the narrowing readout
 };
 
@@ -72,7 +73,7 @@ async function loadStack() {
   state.recommended = data.recommended || null;
   state.edges = data.edges || [];
   state.incomplete = new Set(data.incomplete || []);
-  for (const layer of data.layers) state.baseCounts[layer.key] ??= layer.nodes.length;
+
 
   renderMap();
   renderStrata();
@@ -111,7 +112,8 @@ function renderMap() {
   // Bottom-up: layers[0] is vCenter, and row 0 sits at the bottom of the drawing.
   const rows = state.layers.map((layer) => ({
     layer,
-    nodes: layer.nodes.filter((n) => state.lit?.has(n.id)),
+    nodes: layer.nodes.filter((n) =>
+      state.lit?.has(n.id) && !(state.hideLegacy && n.legacy)),
   }));
 
   const widths = new Map();
@@ -210,6 +212,7 @@ function renderMap() {
 function nodeMapClass(layer, node) {
   const classes = ["map-node"];
   if (state.incomplete.has(node.id)) classes.push("is-nostack");
+  if (node.phase && node.phase !== "general") classes.push(`is-${node.phase}`);
   if (state.pin && state.pin.product === layer.key && state.pin.version === pinVersionFor(node)) {
     classes.push("is-pinned");
   } else if (isRecommended(layer.key, node)) {
@@ -223,10 +226,11 @@ function renderStrata() {
   root.textContent = "";
 
   for (const layer of state.layers) {
+    const visible = layer.nodes.filter((n) => !(state.hideLegacy && n.legacy));
     const litCount = state.lit
-      ? layer.nodes.filter((n) => state.lit.has(n.id)).length
-      : layer.nodes.length;
-    const total = state.baseCounts[layer.key] ?? layer.nodes.length;
+      ? visible.filter((n) => state.lit.has(n.id)).length
+      : visible.length;
+    const total = visible.length;
 
     const count = state.lit && litCount !== total
       ? el("div", { class: "layer-count" },
@@ -234,8 +238,13 @@ function renderStrata() {
       : el("div", { class: "layer-count" }, `${total}`);
 
     const nodes = el("div", { class: "layer-nodes" });
+    let hidden = 0;
     for (const node of layer.nodes) {
+      if (state.hideLegacy && node.legacy) { hidden++; continue; }
       nodes.append(nodeButton(layer, node));
+    }
+    if (hidden > 0) {
+      nodes.append(el("span", { class: "hidden-count" }, `${hidden} legacy hidden`));
     }
 
     root.append(
@@ -255,6 +264,7 @@ function nodeButton(layer, node) {
   const classes = ["node"];
   if (node.noData) classes.push("nodata");
   if (state.incomplete.has(node.id)) classes.push("nostack");
+  if (node.phase && node.phase !== "general") classes.push(`phase-${node.phase}`);
   if (pinned) classes.push("pinned");
   else if (state.lit && lit) classes.push("lit");
   else if (state.lit) classes.push("dim");
@@ -276,6 +286,8 @@ function nodeButton(layer, node) {
     },
     label.join(""),
     node.train ? el("span", { class: "train" }, node.train) : null,
+    node.legacy ? el("span", { class: `phase-tag phase-${node.phase}` },
+      node.phase === "end-of-support" ? "EOS" : "TG") : null,
     node.detail
       ? el("span", { class: "detail" },
           layer.key === "vcenter" ? `on ESX ${node.detail}` : node.detail)
@@ -348,6 +360,10 @@ function showPeek(anchor, layer, node) {
   peek.textContent = "";
 
   const lines = [];
+  if (node.legacy) {
+    lines.push(`${node.phaseLabel} — this is what the interop site's ` +
+      `"hide legacy releases" checkbox removes.`);
+  }
   if (node.noData) {
     lines.push("Upstream publishes no compatibility data for this release yet.");
   } else if (node.releases?.length > 1) {
@@ -464,6 +480,11 @@ for (const btn of document.querySelectorAll("#tabs button")) {
   btn.addEventListener("click", () => showView(btn.dataset.view));
 }
 $("#clear-pin").addEventListener("click", () => { state.pin = null; loadStack(); });
+$("#hide-legacy").addEventListener("change", (ev) => {
+  state.hideLegacy = ev.target.checked;
+  renderMap();
+  renderStrata();
+});
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && state.pin) { state.pin = null; loadStack(); }
 });

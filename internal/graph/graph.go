@@ -14,6 +14,37 @@ import (
 	"github.com/warroyo/interop-visualizer/internal/version"
 )
 
+// SupportPhase is where a release sits in its support lifecycle, as published by the
+// interop matrix. The matrix carries this on every release as two flags; it is not a
+// separate source and nothing here is inferred from dates.
+type SupportPhase string
+
+const (
+	// PhaseGeneral: in General Support.
+	PhaseGeneral SupportPhase = "general"
+	// PhaseTechnicalGuidance: General Support has ended. Still listed, but only
+	// Technical Guidance remains — no new fixes.
+	PhaseTechnicalGuidance SupportPhase = "technical-guidance"
+	// PhaseEndOfSupport: both General Support and Technical Guidance have ended.
+	PhaseEndOfSupport SupportPhase = "end-of-support"
+)
+
+// Label renders a phase for display.
+func (p SupportPhase) Label() string {
+	switch p {
+	case PhaseGeneral:
+		return "General Support"
+	case PhaseTechnicalGuidance:
+		return "Technical Guidance"
+	case PhaseEndOfSupport:
+		return "End of Support"
+	}
+	return string(p)
+}
+
+// Supported reports whether a release is still in General Support.
+func (p SupportPhase) Supported() bool { return p == PhaseGeneral }
+
 // Release is a release with its parsed version.
 type Release struct {
 	ID          int
@@ -23,6 +54,21 @@ type Release struct {
 	Version     version.Version
 	ReleaseType string
 	GADate      int64
+	// TechGuided and GenGuided are the matrix's own support-phase flags.
+	TechGuided bool
+	GenGuided  bool
+}
+
+// Phase returns where this release sits in its support lifecycle.
+func (r Release) Phase() SupportPhase {
+	switch {
+	case r.GenGuided:
+		return PhaseGeneral
+	case r.TechGuided:
+		return PhaseTechnicalGuidance
+	default:
+		return PhaseEndOfSupport
+	}
 }
 
 // IsPatch reports whether this is a patch release, which most views collapse by default.
@@ -105,6 +151,8 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 			Version:     v,
 			ReleaseType: r.ReleaseType,
 			GADate:      r.GADate,
+			TechGuided:  r.TechGuided,
+			GenGuided:   r.GenGuided,
 		}
 	}
 

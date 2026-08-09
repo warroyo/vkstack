@@ -68,6 +68,22 @@ Three things are grouped deliberately:
   published data against VKS or VKr, so it appears as "on ESX 9.1 · 9.0 · 8.0U3" under
   each vCenter node instead of a row nobody can branch from.
 
+### Support lifecycle
+
+The matrix publishes a support phase on every release, and the map colours it:
+
+| | |
+|---|---|
+| **General Support** | normal |
+| **Technical Guidance** | amber, tagged `TG` — General Support has ended, no new fixes |
+| **End of Support** | red and struck through, tagged `EOS` |
+
+"Legacy" means the same thing here as on the interop site: nothing left in General
+Support. The site's *hide legacy releases* checkbox maps onto the same two flags this
+uses (`isHideGenSupported` and `isHideTechSupported`), so the **Hide legacy releases**
+toggle mirrors it, on by default. On the CLI, `interop releases <product> --legacy`
+includes them.
+
 Releases upstream has not published anything for yet — 9.2.0.0 at the time of writing —
 are marked "no data yet" rather than silently omitted.
 

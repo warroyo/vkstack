@@ -10,7 +10,7 @@ Product Interoperability Matrix.
 > That key is never bundled into this tool or written to disk: each `refresh` derives it
 > from the live site and then discards it. The endpoint is undocumented, so it can change
 > or stop working without notice. The matrix itself is the authority, so verify anything
-> load-bearing at <https://interopmatrix.broadcom.com>.
+> you are relying on at <https://interopmatrix.broadcom.com>.
 
 The matrix answers one question at a time: is A compatible with B. This answers the
 question people usually have instead, which is what the whole valid stack looks like.

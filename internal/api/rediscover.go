@@ -23,26 +23,32 @@ type Rediscovered struct {
 	Bundle  string
 }
 
-// Rediscover re-derives the API base URL and auth key from the public SPA bundle.
+// Rediscover derives the API base URL and auth key from the public SPA bundle.
 //
-// The key is a literal in the JavaScript, so it can rotate without notice. Refresh calls
-// this on a 401/403 rather than failing outright.
+// This is the only source of the key: nothing is compiled in and nothing is cached to
+// disk, so every process starts here and a rotation between runs is invisible.
 func Rediscover(ctx context.Context, httpClient *http.Client) (*Rediscovered, error) {
+	return rediscoverFrom(ctx, httpClient, SiteURL)
+}
+
+// rediscoverFrom is Rediscover against an arbitrary origin, so tests can serve a fixture
+// bundle instead of reaching the live site.
+func rediscoverFrom(ctx context.Context, httpClient *http.Client, site string) (*Rediscovered, error) {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 
-	page, err := fetchText(ctx, httpClient, SiteURL+"/Interoperability")
+	page, err := fetchText(ctx, httpClient, site+"/Interoperability")
 	if err != nil {
 		return nil, fmt.Errorf("fetching interop SPA: %w", err)
 	}
 	bundleMatch := bundleRe.FindStringSubmatch(page)
 	if bundleMatch == nil {
-		return nil, fmt.Errorf("could not find the main.<hash>.js bundle reference in %s/Interoperability", SiteURL)
+		return nil, fmt.Errorf("could not find the main.<hash>.js bundle reference in %s/Interoperability", site)
 	}
 	bundleName := bundleMatch[1]
 
-	bundle, err := fetchText(ctx, httpClient, SiteURL+"/"+bundleName)
+	bundle, err := fetchText(ctx, httpClient, site+"/"+bundleName)
 	if err != nil {
 		return nil, fmt.Errorf("fetching bundle %s: %w", bundleName, err)
 	}

@@ -3,6 +3,15 @@
 Compatibility across **vCenter, ESX, vSphere Supervisor, VKS and VKr**, from the Broadcom
 Product Interoperability Matrix.
 
+> **Unofficial.** Not affiliated with or endorsed by Broadcom. Broadcom publishes no
+> public API for the interoperability matrix, so this calls the same private JSON
+> endpoint the matrix website's own front end calls, with the auth key that site ships
+> in its public JavaScript — no login, and no credential of yours. That key is never
+> bundled into this tool or written to disk: each `refresh` derives it from the live
+> site and discards it. Being undocumented, the endpoint can change or stop working
+> without notice. The matrix is the authority — verify anything load-bearing at
+> <https://interopmatrix.broadcom.com>.
+
 The matrix answers one question at a time — "is A compatible with B". This answers the
 question people actually have: *what is the whole valid stack?*
 
@@ -249,6 +258,18 @@ go test ./...
 VKSTACK_TEST_CACHE=~/.cache/vkstack/vkstack.db go test ./internal/graph -run Coverage
 ```
 
-The upstream auth key is public — it is a literal in the interop SPA's JavaScript bundle.
-If it rotates, `refresh` re-derives both the key and the service URL from the live bundle
-on a 401/403 rather than failing.
+### The auth key
+
+The upstream auth key is public — a literal in the interop SPA's JavaScript bundle — but
+it is deliberately not checked into this repo and not cached to disk. Every `refresh`
+fetches the SPA shell, finds the `main.<hash>.js` it references, and pulls both the key
+and the service URL out of it (`internal/api/rediscover.go`). Two extra requests per
+refresh, against eleven that were happening anyway, and a rotation between runs is
+invisible. A rotation *during* a run costs one retry: any 401/403 discards the key,
+re-derives it and repeats the call once.
+
+`--auth-key` skips discovery entirely. It is the escape hatch for the case discovery
+cannot handle — the SPA changing shape so the regexes stop matching — so a key passed
+that way is never replaced and its rejection is reported as-is. `internal/api` tests run
+those regexes against a fixture bundle in `testdata/`, so rot fails CI rather than the
+field. That fixture's key is fake, on purpose.

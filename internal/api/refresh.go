@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/warroyo/vkstack/internal/model"
@@ -25,23 +24,12 @@ func Refresh(ctx context.Context, c *Client, db *store.DB, progress Progress) er
 	pairs := model.Pairs()
 	total := 1 + len(pairs)
 
+	// This first call is also what discovers the auth key: the client has none until a
+	// request needs one, and a rotation is handled inside the client, not here.
 	progress(1, total, "fetching product catalogue")
 	products, err := c.Products(ctx)
 	if err != nil {
-		// A rotated key is the one failure worth retrying automatically.
-		var httpErr *HTTPError
-		if errors.As(err, &httpErr) && httpErr.Unauthorized() {
-			progress(1, total, "auth key rejected, re-deriving from the SPA bundle")
-			rd, rErr := Rediscover(ctx, c.HTTP)
-			if rErr != nil {
-				return fmt.Errorf("auth key rejected and rediscovery failed: %w (original error: %v)", rErr, err)
-			}
-			c.Base, c.AuthKey = rd.Base, rd.AuthKey
-			products, err = c.Products(ctx)
-		}
-		if err != nil {
-			return err
-		}
+		return err
 	}
 
 	wanted := map[int]bool{}

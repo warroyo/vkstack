@@ -234,7 +234,13 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 				pinnedVCenter = rel.Raw
 			}
 		}
-		narrowNodes(layers, viable, pinnedVCenter)
+		vcenterReleases := map[string]bool{}
+		if vc, ok := model.ByKey("vcenter"); ok {
+			for _, r := range g.ReleasesOf(vc.ID) {
+				vcenterReleases[r.Raw] = true
+			}
+		}
+		narrowNodes(layers, viable, pinnedVCenter, vcenterReleases)
 		resp["edges"] = adjacentEdges(g, pins, order, layers, lit, nodeReleases)
 
 		// The exact hosts for the pinned vCenter, so the base node can state them.
@@ -254,7 +260,12 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 
 // narrowNodes rewrites each lit node to hold only the releases that work with the
 // current pin, so a build count never claims more support than the matrix gives.
-func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release, pinnedVCenter string) {
+func narrowNodes(
+	layers []mapLayer,
+	viable map[string][]*graph.Release,
+	pinnedVCenter string,
+	vcenterReleases map[string]bool,
+) {
 	for li := range layers {
 		for ni := range layers[li].Nodes {
 			node := &layers[li].Nodes[ni]
@@ -273,7 +284,7 @@ func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release, pinnedVC
 			case layers[li].Key == "vcenter":
 				// vCenter nodes are single releases and keep their ESX annotation.
 			case layers[li].Key == "supervisor":
-				node.Detail, node.Releases = describeSupervisor(rels, pinnedVCenter)
+				node.Detail, node.Releases = describeSupervisor(rels, pinnedVCenter, vcenterReleases)
 			case len(node.Releases) < total:
 				node.Detail = fmt.Sprintf("%d of %d versions", len(node.Releases), total)
 			case len(node.Releases) > 1:
@@ -282,6 +293,30 @@ func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release, pinnedVC
 				node.Detail = ""
 			}
 		}
+	}
+}
+
+// deliveryPhrase names where a Supervisor build came from, in terms that are true for
+// the train it is on.
+//
+// The two trains number themselves differently, and calling both a "vSphere release"
+// only works for one of them:
+//
+//   - vsc9.x is a vCenter version. "vsc9.1.0.0200" is literally vCenter 9.1.0.0200, and
+//     that is verified against the cached vCenter releases rather than assumed — one
+//     value, 9.0.0.0100, matches no vCenter release we hold.
+//   - vsc0.x is the async train's own sequence. "0.1.15" is not a vSphere version at
+//     all, and reading it as one is meaningless.
+func deliveryPhrase(vsc string, vcenterReleases map[string]bool) string {
+	switch {
+	case vsc == "":
+		return ""
+	case vcenterReleases[vsc]:
+		return "vCenter " + vsc
+	case strings.HasPrefix(vsc, "0."):
+		return "Supervisor async release " + vsc
+	default:
+		return "vSphere " + vsc
 	}
 }
 
@@ -296,7 +331,7 @@ func narrowNodes(layers []mapLayer, viable map[string][]*graph.Release, pinnedVC
 // supports Supervisor delivered by 9.0.2.0100, a later vCenter patch. So entries are
 // described by which release delivered them and nothing is claimed about their age. The
 // one matching the selected vCenter's own delivery leads, since that is what it ships.
-func describeSupervisor(rels []*graph.Release, pinnedVCenter string) (string, []string) {
+func describeSupervisor(rels []*graph.Release, pinnedVCenter string, vcenterReleases map[string]bool) (string, []string) {
 	type entry struct {
 		release *graph.Release
 		vsc     string
@@ -318,11 +353,12 @@ func describeSupervisor(rels []*graph.Release, pinnedVCenter string) (string, []
 
 	labels := make([]string, 0, len(entries))
 	for _, e := range entries {
+		phrase := deliveryPhrase(e.vsc, vcenterReleases)
 		switch {
 		case e.ships:
-			labels = append(labels, fmt.Sprintf("%s — ships with vCenter %s", e.release.Raw, e.vsc))
-		case e.vsc != "":
-			labels = append(labels, fmt.Sprintf("%s — delivered by %s", e.release.Raw, e.vsc))
+			labels = append(labels, fmt.Sprintf("%s — ships with %s, your selection", e.release.Raw, phrase))
+		case phrase != "":
+			labels = append(labels, fmt.Sprintf("%s — from %s", e.release.Raw, phrase))
 		default:
 			labels = append(labels, e.release.Raw)
 		}

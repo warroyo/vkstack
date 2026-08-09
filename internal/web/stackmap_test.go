@@ -115,20 +115,21 @@ func TestSupervisorDetailNamesDeliveriesNotPatches(t *testing.T) {
 		supRelease("v1.30.5+vmware.4-fips-vsc9.0.0.0"),
 	}
 
-	detail, labels := describeSupervisor(rels, "9.1.0.0")
+	vcs := map[string]bool{"9.1.0.0": true, "9.0.1.0": true, "9.0.0.0": true, "9.0.2.0": true, "9.0.2.0100": true}
+	detail, labels := describeSupervisor(rels, "9.1.0.0", vcs)
 	if detail != "1.30.14 · ships with this vCenter, 2 more supported" {
 		t.Errorf("detail = %q", detail)
 	}
-	if len(labels) != 3 || labels[0] != "v1.30.14+vmware.8-fips-vsc9.1.0.0 — ships with vCenter 9.1.0.0" {
+	if len(labels) != 3 || labels[0] != "v1.30.14+vmware.8-fips-vsc9.1.0.0 — ships with vCenter 9.1.0.0, your selection" {
 		t.Errorf("expected the shipped build first and labelled, got %v", labels)
 	}
 
 	// The build that ships with the pin leads even when it is not first in the input.
-	detail, labels = describeSupervisor(rels, "9.0.0.0")
+	detail, labels = describeSupervisor(rels, "9.0.0.0", vcs)
 	if detail != "1.30.5 · ships with this vCenter, 2 more supported" {
 		t.Errorf("detail with an older pin = %q", detail)
 	}
-	if labels[0] != "v1.30.5+vmware.4-fips-vsc9.0.0.0 — ships with vCenter 9.0.0.0" {
+	if labels[0] != "v1.30.5+vmware.4-fips-vsc9.0.0.0 — ships with vCenter 9.0.0.0, your selection" {
 		t.Errorf("expected the matching delivery promoted, got %q", labels[0])
 	}
 }
@@ -139,7 +140,7 @@ func TestSupervisorDetailCollapsesOneK8sPatch(t *testing.T) {
 		supRelease("v1.32.9+vmware.2-fips-vsc0.1.15"),
 		supRelease("v1.32.9+vmware.2-fips-vsc0.1.14"),
 	}
-	detail, _ := describeSupervisor(rels, "8.0U3k")
+	detail, _ := describeSupervisor(rels, "8.0U3k", map[string]bool{"8.0U3k": true})
 	if detail != "1.32.9 · in 2 releases" {
 		t.Errorf("detail = %q, want the single patch named once", detail)
 	}
@@ -152,14 +153,14 @@ func TestSupervisorDeliveriesMayBeNewerThanTheVCenter(t *testing.T) {
 		supRelease("v1.32.9+vmware.2-fips-vsc9.0.2.0100"), // delivered by a later vCenter patch
 		supRelease("v1.32.9+vmware.2-fips-vsc9.0.2.0"),
 	}
-	detail, labels := describeSupervisor(rels, "9.0.2.0")
+	detail, labels := describeSupervisor(rels, "9.0.2.0", map[string]bool{"9.0.2.0": true, "9.0.2.0100": true})
 	if strings.Contains(detail, "older") {
 		t.Errorf("detail %q calls a newer delivery older", detail)
 	}
 	if detail != "1.32.9 · ships with this vCenter, 1 more supported" {
 		t.Errorf("detail = %q", detail)
 	}
-	if labels[0] != "v1.32.9+vmware.2-fips-vsc9.0.2.0 — ships with vCenter 9.0.2.0" {
+	if labels[0] != "v1.32.9+vmware.2-fips-vsc9.0.2.0 — ships with vCenter 9.0.2.0, your selection" {
 		t.Errorf("expected the matching delivery first, got %q", labels[0])
 	}
 }
@@ -173,7 +174,7 @@ func TestSupervisorMultipleK8sPatchesUnderOneMinor(t *testing.T) {
 		supRelease("v1.30.5+vmware.4-fips-vsc9.0.0.0"),
 	}
 	// No delivery matches, so nothing "ships with" the pin.
-	detail, _ := describeSupervisor(rels, "9.0.3.0")
+	detail, _ := describeSupervisor(rels, "9.0.3.0", map[string]bool{})
 	if detail != "3 versions · newest 1.30.14" {
 		t.Errorf("detail = %q, want the count and the newest patch", detail)
 	}
@@ -197,5 +198,39 @@ func TestNonDependencyPairsDoNotAdmitAStack(t *testing.T) {
 	}
 	if !lit["vkr:1.36"] {
 		t.Error("expected the VKr that a VKS does reach to be lit")
+	}
+}
+
+// The two Supervisor trains number themselves differently, and "delivered by 0.1.15" is
+// meaningless — 0.1.15 is not a vSphere version. Each train must be described in terms
+// that are true for it.
+func TestDeliveryPhraseIsTrainAware(t *testing.T) {
+	vcs := map[string]bool{"9.1.0.0200": true}
+	for _, tc := range []struct{ vsc, want string }{
+		{"9.1.0.0200", "vCenter 9.1.0.0200"},          // verified against real releases
+		{"0.1.15", "Supervisor async release 0.1.15"}, // the async train's own sequence
+		{"9.0.0.0100", "vSphere 9.0.0.0100"},          // looks like 9.x, matches no vCenter release
+		{"", ""},
+	} {
+		if got := deliveryPhrase(tc.vsc, vcs); got != tc.want {
+			t.Errorf("deliveryPhrase(%q) = %q, want %q", tc.vsc, got, tc.want)
+		}
+	}
+}
+
+// On the async train nothing "ships with" a vCenter, so the label must not imply it.
+func TestAsyncTrainLabelsAvoidVCenterFraming(t *testing.T) {
+	rels := []*graph.Release{
+		supRelease("v1.32.9+vmware.2-fips-vsc0.1.15"),
+		supRelease("v1.32.9+vmware.2-fips-vsc0.1.14"),
+	}
+	_, labels := describeSupervisor(rels, "8.0U3k", map[string]bool{"8.0U3k": true})
+	for _, l := range labels {
+		if strings.Contains(l, "vCenter") || strings.Contains(l, "ships with") {
+			t.Errorf("async label should not mention vCenter: %q", l)
+		}
+		if !strings.Contains(l, "Supervisor async release") {
+			t.Errorf("async label should name the async train: %q", l)
+		}
 	}
 }

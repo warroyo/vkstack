@@ -86,6 +86,7 @@ For wiring it into an agent, `claude mcp add vkstack -- vkstack mcp`, see
 | `check --vcenter … --esx …` | Validate a fully pinned stack; exit 6 if incompatible |
 | `products` / `releases` | What is in scope, and which pairs upstream publishes |
 | `serve` | Web UI: the stack map, local by default or hosted (see below) |
+| `static` | Generate the UI as plain files, for a static host (see below) |
 | `mcp` | Serve the queries as MCP tools over stdio, for an agent |
 | `cache info\|path\|clear` | Inspect or drop the cache |
 
@@ -244,6 +245,33 @@ resources:
 ```
 
 There is still no authentication, so put an Ingress in front of it accordingly.
+
+### As a static site
+
+`vkstack static` writes the UI as plain files, with no server behind it:
+
+```sh
+vkstack refresh
+vkstack static --out dist
+```
+
+Publish `dist` anywhere that serves files. <https://vkstack.warroyo.com> is this,
+republished from GitHub Actions on every push to `main`, on every release, and nightly to
+pick up upstream. The page footer names the build that generated it.
+
+This works because the map pins one version at a time, so the questions it can ask are
+finite: the build drives all 55 of them — the unpinned map plus one per clickable node —
+through the same handlers `serve` uses, and ships the answers as a single bundle the page
+loads on start. The generated site and a hosted one cannot disagree, because the same code
+produced both. Selecting a version becomes a lookup rather than a round trip.
+
+What it does not carry is the rest of the tool. Multi-pin solves (`stack --vcenter …
+--vks …`) and `check` span combinations that cannot be enumerated ahead of time, and they
+stay where they were: the CLI, the HTTP API and MCP. A static site is the sample for
+people, not the surface for programs.
+
+Being a snapshot, it is current only as of its last build. Rebuild to update it; there is
+nothing running that could refresh itself.
 
 ## Two things worth knowing
 

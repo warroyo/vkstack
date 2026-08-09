@@ -45,7 +45,46 @@ const el = (tag, attrs = {}, ...kids) => {
   return node;
 };
 
+// A static build has no server. Every answer the map can give was produced at build time
+// by the same handlers that would have answered over HTTP, and shipped as one bundle, so
+// selecting a version is a lookup rather than a round trip. `vkstack static` sets the
+// flag; `vkstack serve` leaves it unset and the requests below are real.
+let bundle = null;
+function siteData() {
+  if (!bundle) {
+    bundle = fetch("data.json").then((res) => {
+      if (!res.ok) throw new Error(`could not load the site data (${res.status})`);
+      return res.json();
+    });
+  }
+  return bundle;
+}
+
+async function apiStatic(path) {
+  const url = new URL(path, location.href);
+  const data = await siteData();
+
+  switch (url.pathname) {
+    case "/api/meta":
+      return data.meta;
+    case "/api/model":
+      return data.model;
+    case "/api/stackmap": {
+      const product = url.searchParams.get("product");
+      const version = url.searchParams.get("version");
+      if (!product || !version) return data.stackmap;
+      const pinned = data.stackmaps?.[product]?.[version];
+      // Only reachable if the bundle and the UI disagree about what is clickable, which
+      // means the build is stale rather than the selection being wrong.
+      if (!pinned) throw new Error(`this build has no answer for ${product} ${version}`);
+      return pinned;
+    }
+  }
+  throw new Error(`unknown path ${url.pathname}`);
+}
+
 async function api(path) {
+  if (window.VKSTACK_STATIC) return apiStatic(path);
   const res = await fetch(path);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
@@ -737,6 +776,16 @@ async function copyText(text, button, done) {
 //
 // "6h old" cannot tell one missed tick from two days of failures, and on a shared
 // instance the only person who could see the difference was whoever can read the logs.
+// ageHours is computed when the response is built, which is the same instant it is read
+// on a live server and days earlier on a static build. Deriving it from fetchedAt keeps a
+// published snapshot honest about its age instead of freezing it at the moment of the
+// build. The server's own figure is left in the payload for programs reading the API.
+function ageHours(meta) {
+  const fetched = Date.parse(meta.fetchedAt);
+  if (Number.isNaN(fetched)) return meta.ageHours;
+  return Math.max(0, Math.floor((Date.now() - fetched) / 3600000));
+}
+
 function renderMeta(meta) {
   const mode = meta.refreshInterval
     ? `refreshes every ${meta.refreshInterval}`
@@ -744,8 +793,9 @@ function renderMeta(meta) {
   const box = $("#meta");
   box.textContent = "";
   box.append(el("span", {},
-    `${meta.fetchedAt} · ${meta.ageHours}h old · ${mode} · ` +
-    meta.products.map((p) => `${p.label} ${p.count}`).join("  ")));
+    `${meta.fetchedAt} · ${ageHours(meta)}h old · ${mode} · ` +
+    meta.products.map((p) => `${p.label} ${p.count}`).join("  ") +
+    (meta.version ? ` · vkstack ${meta.version}` : "")));
 
   const r = meta.refresh;
   if (!r || !r.attempts?.length) return;
@@ -863,7 +913,9 @@ function buildManifest() {
     generated: new Date().toISOString(),
     selection: state.pin ? `${labelFor(state.pin.product)} ${state.pin.version}` : "none",
     snapshot: state.meta
-      ? { fetchedAt: state.meta.fetchedAt, ageHours: state.meta.ageHours }
+      // Age as it stands now, not as the response was stamped: this line is read back
+      // as "h old when this was generated", and on a static build those differ.
+      ? { fetchedAt: state.meta.fetchedAt, ageHours: ageHours(state.meta), vkstack: state.meta.version }
       : null,
     steps,
     provenance: state.provenance,

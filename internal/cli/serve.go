@@ -78,6 +78,7 @@ the client's.`,
 				ReadOnly:        readOnly,
 				RefreshInterval: refreshInterval,
 				Ledger:          ledger,
+				Version:         cmd.Root().Version,
 			})
 			if err != nil {
 				return err

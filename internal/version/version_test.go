@@ -3,7 +3,7 @@ package version
 import (
 	"testing"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
+	"github.com/warroyo/vkstack/internal/model"
 )
 
 // assertAscending checks that the given versions are in strictly increasing order.
@@ -141,29 +141,6 @@ func TestK8sMinor(t *testing.T) {
 				t.Errorf("K8sMinor(%q) = (%d, %v), want (%d, %v)", tc.version, got, ok, tc.want, tc.wantOK)
 			}
 		})
-	}
-}
-
-func TestLine(t *testing.T) {
-	vks, _ := model.ByKey("vks")
-	vc, _ := model.ByKey("vcenter")
-
-	// Every patch of the same k8s minor collapses to one line, which is what keeps
-	// upgrade-hop pruning effective.
-	a := Line(Parse("3.6.0+v1.35", model.SchemeGeneric), vks)
-	b := Line(Parse("3.6.3+1.35", model.SchemeGeneric), vks)
-	if a != b {
-		t.Errorf("expected same VKS line for the same k8s minor, got %q and %q", a, b)
-	}
-
-	same := Line(Parse("8.0U3", model.SchemeVSphere), vc)
-	alsoSame := Line(Parse("8.0U3k", model.SchemeVSphere), vc)
-	if same != alsoSame {
-		t.Errorf("expected 8.0U3 and 8.0U3k on one line, got %q and %q", same, alsoSame)
-	}
-	diff := Line(Parse("8.0U2", model.SchemeVSphere), vc)
-	if diff == same {
-		t.Errorf("expected 8.0U2 on a different line from 8.0U3")
 	}
 }
 

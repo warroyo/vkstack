@@ -3,8 +3,8 @@ package graph
 import (
 	"testing"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/store"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
 )
 
 // Product ids, mirroring the real ones so model lookups work.
@@ -335,5 +335,89 @@ func TestNonDependencyPairsAreNotEnforced(t *testing.T) {
 	}
 	if !sawIt {
 		t.Error("expected the non-dependency mismatch reported as informational")
+	}
+}
+
+// A pinned pair with no published cell is not an open question — inside a pair upstream
+// publishes, a missing cell is the matrix declining to list the two together. The solver
+// has always read it that way when picking releases; pins used to be judged more loosely,
+// which produced "valid" stacks the solver would never assemble and lit versions in the
+// web map that were never published against the selection.
+func TestUnlistedPinPairCannotFormAStack(t *testing.T) {
+	snap := fixture()
+	// Drop the cell linking the old vCenter to the old Supervisor, leaving the pair
+	// published but these two releases never listed together.
+	var kept []store.Compat
+	for _, c := range snap.Compat {
+		if (c.ARelease == 22 && c.BRelease == 32) || (c.ARelease == 32 && c.BRelease == 22) {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	snap.Compat = kept
+	g, err := Load(snap, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	pins := map[int]*Release{vc: g.Releases[22], sup: g.Releases[32]}
+	stacks, failure := g.Stacks(pins, StackOptions{})
+	if len(stacks) > 0 {
+		t.Fatal("two releases upstream never lists together must not form a stack")
+	}
+	if failure == nil || !failure.PinConflict || !failure.Unlisted {
+		t.Fatalf("expected an unlisted pin conflict, got %+v", failure)
+	}
+
+	// And nothing is viable, including the pins themselves: a dead end must not read as
+	// a one-node answer.
+	if opts := g.ViableOptions(pins, StackOptions{}); len(opts) != 0 {
+		t.Errorf("a dead-end pin should offer nothing, got %d products with options", len(opts))
+	}
+}
+
+// An unpublished *product* pair still cannot constrain anything: three of the ten have no
+// data by design, and demanding a cell there would rule out every stack.
+func TestUnpublishedPairStillPassesPinValidation(t *testing.T) {
+	g := load(t, Options{})
+	pins := map[int]*Release{sup: g.Releases[31], vkr: g.Releases[51]} // Supervisor × VKr
+	if _, failure := g.Stacks(pins, StackOptions{}); failure != nil && failure.PinConflict {
+		t.Errorf("Supervisor × VKr is unpublished and must not block a pin: %+v", failure)
+	}
+}
+
+// "nothing compatible" was printed whenever the patch filter emptied a group, which is a
+// different and false claim: the releases exist, they are just hidden by default.
+func TestCompatibleWithCountsPatchesItHides(t *testing.T) {
+	snap := fixture()
+	snap.Releases = append(snap.Releases,
+		store.Release{ID: 33, ProductID: sup, HybridVersion: "v1.34.0+vmware.1", ReleaseType: "Patch", GADate: 1})
+	snap.Compat = append(snap.Compat, store.Compat{ARelease: 33, BRelease: 21, Status: store.StatusCompatible})
+	// Remove the non-patch Supervisor the new vCenter pairs with, so patches are all
+	// that is left for it.
+	var kept []store.Compat
+	for _, c := range snap.Compat {
+		if (c.ARelease == 21 && c.BRelease == 31) || (c.ARelease == 31 && c.BRelease == 21) {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	snap.Compat = kept
+	g, err := Load(snap, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for _, grp := range g.CompatibleWith(g.Releases[21], CompatOptions{}) {
+		if grp.Product.Key != "supervisor" {
+			continue
+		}
+		if len(grp.Releases) != 0 {
+			t.Fatalf("expected the patch filter to empty the group, got %d", len(grp.Releases))
+		}
+		if grp.HiddenPatches != 1 {
+			t.Errorf("HiddenPatches = %d, want 1 — otherwise this reads as nothing compatible",
+				grp.HiddenPatches)
+		}
 	}
 }

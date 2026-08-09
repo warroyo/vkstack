@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/warroyo/interop-visualizer/internal/api"
+	"github.com/warroyo/vkstack/internal/api"
 )
 
 func newRefreshCmd() *cobra.Command {
@@ -33,6 +33,14 @@ Expect this to take a minute or two and move roughly 40 MB.`,
 
 			if !force {
 				if at, err := db.FetchedAt(); err == nil && !at.IsZero() && time.Since(at) < time.Hour {
+					if g.jsonOut {
+						return emit(cmd, "refresh", 1, map[string]any{
+							"refreshed": false,
+							"reason":    "cache is recent",
+							"fetchedAt": at.Format(time.RFC3339),
+							"hint":      "pass --force to refresh anyway",
+						})
+					}
 					fmt.Fprintf(cmd.OutOrStdout(),
 						"cache was refreshed %s ago; use --force to refresh anyway\n",
 						time.Since(at).Round(time.Minute))
@@ -52,6 +60,13 @@ Expect this to take a minute or two and move roughly 40 MB.`,
 			counts, err := db.Counts()
 			if err != nil {
 				return err
+			}
+			if g.jsonOut {
+				return emit(cmd, "refresh", 1, map[string]any{
+					"refreshed": true,
+					"took":      time.Since(start).Round(time.Second).String(),
+					"counts":    counts,
+				})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"refreshed in %s: %d products, %d releases, %d compatibility edges\n",

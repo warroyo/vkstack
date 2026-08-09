@@ -13,10 +13,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/warroyo/interop-visualizer/internal/api"
-	"github.com/warroyo/interop-visualizer/internal/graph"
-	"github.com/warroyo/interop-visualizer/internal/store"
-	"github.com/warroyo/interop-visualizer/internal/web"
+	"github.com/warroyo/vkstack/internal/api"
+	"github.com/warroyo/vkstack/internal/graph"
+	"github.com/warroyo/vkstack/internal/store"
+	"github.com/warroyo/vkstack/internal/web"
 )
 
 func newServeCmd() *cobra.Command {
@@ -39,7 +39,7 @@ the machine.
 
 For a shared instance, run it read-only with a refresh interval:
 
-  interop serve --bind 0.0.0.0 --read-only --refresh-interval 6h
+  vkstack serve --bind 0.0.0.0 --read-only --refresh-interval 6h
 
 --read-only rejects client-triggered refreshes, so visitors cannot make the server call
 upstream. The scheduled refresh still writes to the cache — it is the server's job, not
@@ -71,11 +71,13 @@ the client's.`,
 				}
 			}
 
+			ledger := &web.Ledger{}
 			handler, err := web.NewServer(web.Config{
 				Load:            load.get,
 				Refresh:         clientRefresh,
 				ReadOnly:        readOnly,
 				RefreshInterval: refreshInterval,
+				Ledger:          ledger,
 			})
 			if err != nil {
 				return err
@@ -91,11 +93,11 @@ the client's.`,
 			cold := isCold(db)
 			if cold && refreshInterval == 0 {
 				fmt.Fprintln(stderr,
-					"warning: no cached data yet — run `interop refresh` for anything beyond the model view")
+					"warning: no cached data yet — run `vkstack refresh` for anything beyond the model view")
 			}
 
 			if refreshInterval > 0 {
-				startScheduledRefresh(cmd.Context(), stderr, refreshOnce, refreshInterval, cold)
+				startScheduledRefresh(cmd.Context(), stderr, refreshOnce, refreshInterval, cold, ledger)
 			}
 			if bind != "127.0.0.1" && bind != "localhost" && !readOnly {
 				fmt.Fprintf(stderr,
@@ -125,7 +127,7 @@ the client's.`,
 			if refreshInterval > 0 {
 				mode += fmt.Sprintf(", refreshing every %s", refreshInterval)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "interop is serving at %s (%s; ctrl-c to stop)\n", url, mode)
+			fmt.Fprintf(cmd.OutOrStdout(), "vkstack is serving at %s (%s; ctrl-c to stop)\n", url, mode)
 			if open {
 				_, boundPort, _ := net.SplitHostPort(ln.Addr().String())
 				openBrowser("http://localhost:" + boundPort)
@@ -149,17 +151,22 @@ the client's.`,
 //
 // A failed refresh is logged and retried on the next tick rather than taking the server
 // down: serving slightly stale data beats serving nothing because upstream had a blip.
+// Every attempt is also recorded in the ledger, so the failure is visible to whoever is
+// looking at the UI rather than only to whoever can read this log.
 func startScheduledRefresh(
 	ctx context.Context,
 	logTo interface{ Write([]byte) (int, error) },
 	refresh func(func(int, int, string)) error,
 	interval time.Duration,
 	cold bool,
+	ledger *web.Ledger,
 ) {
 	run := func(reason string) {
 		start := time.Now()
 		fmt.Fprintf(logTo, "refresh (%s) starting\n", reason)
-		if err := refresh(func(int, int, string) {}); err != nil {
+		err := refresh(func(int, int, string) {})
+		ledger.Record(start, time.Since(start), err)
+		if err != nil {
 			fmt.Fprintf(logTo, "refresh failed: %v (will retry in %s)\n", err, interval)
 			return
 		}
@@ -194,7 +201,7 @@ func isCold(db *store.DB) bool {
 //
 // Loading reads the whole cache and reparses every version, which is fine once but wasteful
 // per request on a hosted instance. The cached copy is dropped when the cache's fetched_at
-// changes, so a refresh — from the schedule, or from a separate `interop refresh` against
+// changes, so a refresh — from the schedule, or from a separate `vkstack refresh` against
 // the same cache — is picked up without a restart.
 type cachedLoader struct {
 	db        *store.DB
@@ -216,13 +223,13 @@ func (c *cachedLoader) get() (*graph.Graph, error) {
 	defer c.mu.Unlock()
 
 	// Reading just the timestamp is far cheaper than a full load, and it means a
-	// refresh from a separate `interop refresh` against the same cache is picked up too.
+	// refresh from a separate `vkstack refresh` against the same cache is picked up too.
 	at, err := c.db.FetchedAt()
 	if err != nil {
 		return nil, err
 	}
 	if at.IsZero() {
-		return nil, errors.New("no cached data yet — run `interop refresh`, or start with --refresh-interval")
+		return nil, errors.New("no cached data yet — run `vkstack refresh`, or start with --refresh-interval")
 	}
 	if c.graph != nil && at.UnixMilli() == c.fetchedAt {
 		return c.graph, nil

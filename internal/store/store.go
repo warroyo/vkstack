@@ -81,7 +81,7 @@ func DefaultPath() (string, error) {
 		}
 		dir = filepath.Join(home, ".cache")
 	}
-	return filepath.Join(dir, "interop", "interop.db"), nil
+	return filepath.Join(dir, "vkstack", "vkstack.db"), nil
 }
 
 // Open opens (creating if needed) the cache at path and applies the schema.
@@ -157,7 +157,7 @@ func (db *DB) migrate() error {
 		return db.SetMeta("schema_version", schemaVersion)
 	}
 	if got != schemaVersion {
-		return fmt.Errorf("cache at %s uses schema version %s, this build expects %s — run `interop cache clear`",
+		return fmt.Errorf("cache at %s uses schema version %s, this build expects %s — run `vkstack cache clear`",
 			db.path, got, schemaVersion)
 	}
 	return nil

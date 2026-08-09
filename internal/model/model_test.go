@@ -187,7 +187,7 @@ func TestKnownUnpublishedPairsMatchesDefaultCoverage(t *testing.T) {
 }
 
 // docs/model.md is generated. This regenerates it and fails if the committed copy has
-// drifted, which is what keeps the doc, the diagram and `interop explain` in step.
+// drifted, which is what keeps the doc, the diagram and `vkstack explain` in step.
 // Run `go test ./internal/model -update` to refresh it.
 func TestDocMatchesCommittedFile(t *testing.T) {
 	path := filepath.Join("..", "..", "docs", "model.md")

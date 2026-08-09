@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/store"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
 )
 
 // Progress reports refresh steps to the caller (a CLI line, or an SSE frame).

@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        # Formatting is not a matter of taste in Go, so it fails the build rather than
+        # generating review comments.
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./...
+
+      - name: build
+        run: go build ./...
+
+      # docs/model.md is generated from internal/model. The test that checks for drift
+      # runs above; this proves the generator is reachable and produces no diff.
+      - name: generated docs are current
+        run: |
+          go test ./internal/model -update
+          git diff --exit-code -- docs/model.md

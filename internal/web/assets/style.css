@@ -1,4 +1,4 @@
-/* interop — a cross-section of the vSphere stack.
+/* vkstack — a cross-section of the vSphere stack.
    The page is deliberately quiet so that one thing can be loud: the lit load path
    through the layers. Everything else is hairlines and cool greys. */
 
@@ -124,7 +124,68 @@ h2 { font-size: 0.9rem; margin: 1.6rem 0 0.6rem; }
   margin-bottom: 1.3rem;
 }
 
-.stack-actions { display: flex; align-items: center; gap: 0.7rem; }
+.stack-actions { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+
+/* The filter sits with the list it narrows, not in the header: it is about finding a
+   version among dozens, not about what the map is showing. */
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.filter {
+  font: inherit;
+  font-size: 0.82rem;
+  font-family: var(--mono);
+  padding: 0.32rem 0.6rem;
+  min-width: 14rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--hair);
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.filter:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+
+/* Whether the data is still moving, not just how old it is. A failing background refresh
+   used to be visible only to whoever could read the logs on the box. */
+.stale-flag,
+.refresh-flag {
+  font: inherit;
+  font-size: 0.72rem;
+  font-family: var(--mono);
+  margin-left: 0.7rem;
+  padding: 0 0.35rem;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  background: none;
+  cursor: pointer;
+}
+
+.stale-flag { color: var(--eos); background: var(--eos-soft); }
+.refresh-flag { color: var(--faint); border-color: var(--hair); }
+
+.refresh-log {
+  margin: 0.7rem 0 0;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.76rem;
+}
+
+.refresh-log.hidden { display: none; }
+.refresh-log h2 { margin: 0 0 0.4rem; font-size: 0.72rem; }
+.refresh-log ul { margin: 0; padding-left: 1rem; font-family: var(--mono); }
+.refresh-log li.failed { color: var(--eos); }
+.refresh-log li.ok { color: var(--muted); }
+.refresh-log .when { margin-right: 0.6rem; color: var(--faint); }
+.refresh-log .note { margin: 0.5rem 0 0; color: var(--muted); font-family: inherit; }
+
+.offscreen { position: fixed; left: -9999px; top: 0; opacity: 0; }
 
 .pin-label {
   font-family: var(--mono);
@@ -272,6 +333,51 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 
 .recommended dd { margin: 0.1rem 0 0; font-family: var(--mono); font-size: 0.85rem; }
 
+/* The solver reaches past the legacy filter, so a recommendation can name a release the
+   map is hiding. It is coloured like the node would have been, and says so in words. */
+.recommended dd.phase-technical-guidance { color: var(--tg); }
+.recommended dd.phase-end-of-support { color: var(--eos); }
+
+.recommended .note {
+  display: block;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.72rem;
+  font-style: italic;
+  color: var(--faint);
+}
+
+.provenance-summary {
+  margin: 0.75rem 0 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--hair);
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.recommended .footnote-line { margin: 0.35rem 0 0; color: var(--warn); font-style: normal; }
+
+/* The decision has to leave the screen: into a change ticket, a maintenance plan, and the
+   hands of whoever runs the upgrade weeks later. */
+.manifest-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.8rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--hair);
+}
+
+button.ghost.inline { margin-left: 0.6rem; }
+
+/* Printing is the cheapest export there is: a change board wants a page, not a browser. */
+@media print {
+  .masthead nav, .stack-actions, .manifest-actions, .legend,
+  #strata, #peek, .refresh-log, .section-head .filter { display: none !important; }
+  .recommended { border: 1px solid #999; break-inside: avoid; }
+  body { color: #000; background: #fff; }
+  .map-svg { max-width: 100%; }
+}
+
 .footnote {
   margin-top: 1.1rem;
   font-size: 0.78rem;
@@ -300,6 +406,36 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
   font-family: inherit;
   font-weight: 700;
   margin-bottom: 0.25rem;
+}
+
+/* Shift-click keeps the popover open. Locked, it takes the pointer back so its contents
+   can be read, selected and copied — the exact builds and the upstream caveats are worth
+   more than a tooltip that dies when the mouse moves. */
+.peek.is-locked {
+  pointer-events: auto;
+  user-select: text;
+  max-height: 70vh;
+  overflow-y: auto;
+  border-color: var(--signal);
+  box-shadow: 0 12px 30px rgba(10, 16, 28, 0.24);
+}
+
+.peek-hint {
+  float: right;
+  margin-left: 0.8rem;
+  font-weight: 400;
+  font-size: 0.66rem;
+  color: var(--faint);
+}
+
+.peek-actions { margin-top: 0.5rem; }
+
+/* What a node means, as opposed to which releases it covers. Never truncated: the release
+   list is what gets cut when the popover runs out of room. */
+.peek .peek-head {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
 }
 
 .peek.hidden { display: none; }
@@ -359,6 +495,14 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
   font-size: 0.88rem;
 }
 
+/* "Nothing selected yet" and "this selection has no stack" both used to draw an empty
+   frame. The second is an answer and has to look like one. */
+.map-empty.is-dead-end {
+  color: var(--eos);
+  background: var(--eos-soft);
+  border-radius: var(--radius);
+}
+
 .map-caption {
   padding: 0.4rem 0.7rem 0;
   font-family: var(--mono);
@@ -382,7 +526,56 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
   opacity: 0.42;
 }
 
-.map-node { cursor: pointer; }
+/* A connection carries the matrix's own confidence. Solid is a tested yes; dashed is
+   "compatible, not tested"; dotted is a pair upstream never evaluated, drawn because a
+   stack exists rather than because anything was looked up. Drawing all three the same
+   let the picture claim more than the data. */
+.map-link.is-untested {
+  stroke-dasharray: 6 3;
+  opacity: 0.5;
+}
+
+.map-link.is-unverified {
+  stroke-dasharray: 1.5 3.5;
+  stroke: var(--muted);
+  opacity: 0.62;
+}
+
+/* The map is reconciled rather than rebuilt, so these transitions finally have something
+   to animate. Position lives on the group's transform: one animatable property instead of
+   a coordinate rewrite on every child. */
+.map-node {
+  cursor: pointer;
+  transition: transform var(--step) ease, opacity var(--step) ease;
+}
+
+/* Re-centring jitter of a node nobody touched snaps instead of sliding, so motion on the
+   map always means something actually changed. */
+.map-node.is-static { transition: opacity var(--step) ease; }
+
+.map-node.is-entering,
+.map-link.is-entering { opacity: 0; }
+
+.map-node.is-leaving,
+.map-link.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.map-link { transition: opacity var(--step) ease, d var(--step) ease; }
+
+/* A solve is in flight: keep the previous answer legible instead of blanking the frame,
+   which reads as a broken tool on a slow connection. */
+.map.is-solving .map-svg {
+  opacity: 0.45;
+  transition: opacity 120ms ease 90ms;
+}
+
+.map.is-solving { cursor: progress; }
+
+@media (prefers-reduced-motion: reduce) {
+  .map-node, .map-link, .map.is-solving .map-svg { transition: none; }
+}
 
 .map-node .map-node-box {
   fill: var(--signal-soft);
@@ -523,8 +716,41 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 .phase-tag.phase-technical-guidance { background: var(--tg); }
 .phase-tag.phase-end-of-support { background: var(--eos); }
 
+/* A grouped line keeps its best phase as its headline — it is still usable — but when the
+   builds behind it disagree, the worst one is named too. Outlined rather than filled, so
+   it reads as a qualification of the node and not as the node's own phase. */
+.phase-tag.is-mixed {
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
+.phase-tag.phase-technical-guidance.is-mixed { color: var(--tg); }
+.phase-tag.phase-end-of-support.is-mixed { color: var(--eos); }
+
 .map-node.is-technical-guidance .map-node-box { stroke: var(--tg); fill: var(--tg-soft); }
 .map-node.is-end-of-support .map-node-box { stroke: var(--eos); fill: var(--eos-soft); }
+
+/* Provenance, on the node itself. "not tested" is upstream's own hedge on a yes;
+   "inferred" means no upstream result exists for a pair the stack depends on. */
+.prov-tag {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0 0.26rem;
+  border-radius: 3px;
+  border: 1px dashed currentColor;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  vertical-align: 0.1em;
+  text-decoration: none;
+}
+
+.prov-tag.is-untested { color: var(--tg); }
+.prov-tag.is-unverified { color: var(--muted); }
+.prov-tag.is-footnote { color: var(--warn); border-style: solid; }
+
+.map-node.is-untested .map-node-box { stroke-dasharray: 6 3; }
+.map-node.is-unverified .map-node-box { stroke-dasharray: 1.5 3.5; }
 
 .hidden-count {
   align-self: center;
@@ -566,3 +792,9 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 .sw-general { background: var(--signal-soft); border-color: var(--signal); }
 .sw-tg { background: var(--tg-soft); border-color: var(--tg); }
 .sw-eos { background: var(--eos-soft); border-color: var(--eos); }
+
+/* Lifecycle is a fill; provenance is a stroke. Keeping the two channels apart is what
+   lets a node say "supported" and "not tested" at the same time without ambiguity. */
+.sw-mixed { background: transparent; border-color: var(--eos); border-style: dashed; }
+.sw-untested { background: transparent; border-color: var(--tg); border-style: dashed; }
+.sw-unverified { background: transparent; border-color: var(--muted); border-style: dotted; }

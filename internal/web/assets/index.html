@@ -3,19 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>interop — the vSphere stack, layer by layer</title>
+  <title>vkstack — the VKS stack, layer by layer</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="masthead">
     <div class="masthead-row">
-      <h1>interop</h1>
+      <h1>vkstack</h1>
       <nav id="tabs">
         <button data-view="stack" class="active">The stack</button>
         <button data-view="model">How it fits together</button>
       </nav>
     </div>
     <p id="meta" class="meta"></p>
+    <!-- Whether the data is still moving, not just how old it is. -->
+    <section id="refresh-log" class="refresh-log hidden"></section>
   </header>
 
   <main>
@@ -33,6 +35,8 @@
           </label>
           <span id="pin-label" class="pin-label"></span>
           <button id="clear-pin" class="ghost hidden">Clear</button>
+          <button id="copy-link" class="ghost" title="Copy a link to exactly this view">Copy link</button>
+          <button id="save-stack" class="ghost hidden">Save as my stack</button>
         </div>
       </div>
 
@@ -48,13 +52,22 @@
         <li><span class="swatch sw-general"></span>General Support</li>
         <li><span class="swatch sw-tg"></span>Technical Guidance — no new fixes</li>
         <li><span class="swatch sw-eos"></span>End of Support</li>
+        <li><span class="swatch sw-mixed"></span>grouped line with older builds out of support</li>
+        <li><span class="swatch sw-untested"></span>listed compatible, not tested upstream</li>
+        <li><span class="swatch sw-unverified"></span>never evaluated upstream — inferred</li>
       </ul>
 
-      <h2 class="section-label">Every version, by layer</h2>
-      <p class="section-note">
-        Click any version to branch from it. Lit versions can be in a stack with your
-        selection; faded ones cannot.
-      </p>
+      <div class="section-head">
+        <div>
+          <h2 class="section-label">Every version, by layer</h2>
+          <p class="section-note">
+            Click any version to branch from it. Lit versions can be in a stack with your
+            selection; faded ones cannot.
+          </p>
+        </div>
+        <input type="search" id="filter" class="filter" placeholder="Filter versions…"
+               aria-label="Filter versions">
+      </div>
 
       <!-- Rows render bottom-up: the base you build on first is at the bottom. -->
       <div id="strata" class="strata" aria-label="Compatibility layers, bottom to top"></div>
@@ -65,7 +78,11 @@
         Lit means a complete valid stack exists containing both that version and your
         selection — not just that two products happen to list each other.
         Supervisor, VKS and VKr are grouped by version line; vCenter is not, because its
-        patch letter changes what it supports.
+        patch letter changes what it supports. A grouped node stands for several releases
+        and clicking it selects the newest — hover to see which, and the rest.
+        Where the matrix hedges, so does the picture: dashed means upstream lists the
+        combination compatible without testing it, dotted means it published no result
+        for that pair at all and the connection is inferred from the rest of the stack.
       </p>
     </section>
 

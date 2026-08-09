@@ -72,7 +72,7 @@ func Unknowns(covered Coverage) []Unknown {
 				"data exists for them.",
 			Consequence: "They show as \"no data yet\" rather than being hidden, so you can " +
 				"see that a version exists without being told anything false about it.",
-			Workaround: "Re-run `interop refresh` once the release ships.",
+			Workaround: "Re-run `vkstack refresh` once the release ships.",
 		},
 		Unknown{
 			Title: "Whether \"compatible, not tested\" will work for you",
@@ -80,7 +80,7 @@ func Unknowns(covered Coverage) []Unknown {
 				"This tool treats both as a yes.",
 			Consequence: "A stack can be reported valid on the strength of a combination " +
 				"nobody has actually run.",
-			Workaround: "`interop compat <product> <version>` marks which results are " +
+			Workaround: "`vkstack compat <product> <version>` marks which results are " +
 				"not tested.",
 		},
 		Unknown{

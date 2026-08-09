@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/warroyo/interop-visualizer/internal/graph"
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/store"
+	"github.com/warroyo/vkstack/internal/graph"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
 )
 
 const (
@@ -39,6 +39,9 @@ func testGraph(t *testing.T) *graph.Graph {
 	// compatible with the 9.0.0.0 vCenter.
 	add(22, vc, "8.0U3")
 	add(12, esx, "8.0U3")
+	// A host the vCenter accepts and the Supervisor does not. ESX gates the Supervisor,
+	// so this must drop off the vCenter node's host list once a Supervisor is pinned.
+	add(13, esx, "8.0U3a")
 	// Deliberately awkward: "+" and a parenthetical, both of which have bitten before.
 	add(31, sup, "v1.33.0+vmware.1-fips-vsc9.0.0.0")
 	// Same Kubernetes minor and train as 31, but only 31 works with the vCenter below.
@@ -76,6 +79,7 @@ func testGraph(t *testing.T) *graph.Graph {
 	ok(21, 52) // compatible with vCenter, bridged by nothing
 	// The 8.0U3 base carries the other 1.33 build, and only that one.
 	ok(12, 22)
+	ok(13, 22) // accepted by the vCenter, but never listed against a Supervisor
 	ok(22, 32)
 	ok(12, 32)
 	ok(22, 41)
@@ -92,6 +96,20 @@ func testGraph(t *testing.T) *graph.Graph {
 func testServer(t *testing.T) http.Handler {
 	t.Helper()
 	return serverWith(t, Config{Refresh: func(func(int, int, string)) error { return nil }})
+}
+
+// serverForGraph builds a server over a graph the test already holds, so it can check
+// responses against the same releases the handler saw.
+func serverForGraph(t *testing.T, g *graph.Graph) http.Handler {
+	t.Helper()
+	h, err := NewServer(Config{
+		Load:    func() (*graph.Graph, error) { return g, nil },
+		Refresh: func(func(int, int, string)) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	return h
 }
 
 // serverWith builds a server around the fixture graph, letting a test set only the

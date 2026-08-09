@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
+	"github.com/warroyo/vkstack/internal/model"
 )
 
 func newExplainCmd() *cobra.Command {
@@ -29,6 +29,11 @@ dashed and called out.`,
 				fmt.Fprint(cmd.OutOrStdout(), model.ASCII(covered))
 			case diagramOnly:
 				fmt.Fprint(cmd.OutOrStdout(), model.Mermaid(covered))
+			case g.jsonOut:
+				// The model is the part an agent most needs before reasoning: it says
+				// which relationships are real, which are merely published, and which
+				// are not knowable at all.
+				return emit(cmd, "model", 1, modelJSON(covered))
 			default:
 				fmt.Fprint(cmd.OutOrStdout(), model.Doc(covered))
 			}
@@ -40,11 +45,69 @@ dashed and called out.`,
 	return cmd
 }
 
+// modelJSON is the dependency model as data.
+//
+// The prose forms are for people; this is the same knowledge shaped so a program can act
+// on it — in particular the distinction between a relationship that constrains a stack
+// and one that is merely published, which is the difference between a right answer and a
+// combination that is listed compatible yet cannot exist.
+func modelJSON(covered model.Coverage) map[string]any {
+	products := make([]map[string]any, 0, len(model.Products))
+	for _, p := range model.Products {
+		entry := map[string]any{
+			"key": p.Key, "label": p.Label, "name": p.Name,
+			"example": p.Example, "upgradeOrder": p.UpgradeOrder,
+			"versionScheme": string(p.Scheme),
+		}
+		if len(p.Trains) > 0 {
+			entry["trains"] = p.Trains
+			entry["trainNote"] = p.TrainNote
+		}
+		products = append(products, entry)
+	}
+
+	edges := make([]map[string]any, 0, len(model.Edges))
+	for _, e := range model.Edges {
+		from, _ := model.ByKey(e.From)
+		to, _ := model.ByKey(e.To)
+		edges = append(edges, map[string]any{
+			"from": e.From, "to": e.To,
+			"label": e.Label, "summary": e.Summary, "prose": e.Prose,
+			"bidirectional": e.Bidirectional,
+			// Dependency is the field that matters most: only these constrain a stack.
+			"dependency":    e.Primary,
+			"evidence":      string(e.Evidence),
+			"evidenceMeans": e.Evidence.Describe(),
+			"publishedNow":  covered(from.ID, to.ID),
+		})
+	}
+
+	// Every limit is stated rather than glossed: a compatibility tool that presents a
+	// gap as an answer is worse than no tool, and that is truer for an agent, which has
+	// no way to notice the omission for itself.
+	unknowns := make([]map[string]any, 0)
+	for _, u := range model.Unknowns(covered) {
+		unknowns = append(unknowns, map[string]any{
+			"title":       u.Title,
+			"detail":      u.Detail,
+			"consequence": u.Consequence,
+			"workaround":  u.Workaround,
+		})
+	}
+
+	return map[string]any{
+		"products":     products,
+		"edges":        edges,
+		"upgradeOrder": model.UpgradeOrder(),
+		"unknowns":     unknowns,
+	}
+}
+
 // coverageFromCache reports which product pairs upstream publishes, so the diagram
 // reflects the real state of the data rather than a claim baked in at authoring time.
 //
 // With no cache, it falls back to the coverage observed the last time this was verified
-// against the live API, so `interop explain` still works on a cold install.
+// against the live API, so `vkstack explain` still works on a cold install.
 func coverageFromCache() model.Coverage {
 	db, err := openCache()
 	if err != nil {

@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/warroyo/interop-visualizer/internal/graph"
-	"github.com/warroyo/interop-visualizer/internal/model"
+	"github.com/warroyo/vkstack/internal/graph"
+	"github.com/warroyo/vkstack/internal/model"
 )
 
 // handleGraph renders a focused neighbourhood of the real compatibility data as mermaid.

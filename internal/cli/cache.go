@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/store"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
 )
 
 func newCacheCmd() *cobra.Command {
@@ -36,23 +36,41 @@ func newCacheInfoCmd() *cobra.Command {
 			defer db.Close()
 
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "path:    %s\n", db.Path())
-
 			at, err := db.FetchedAt()
 			if err != nil {
 				return err
 			}
-			if at.IsZero() {
-				fmt.Fprintln(out, "state:   empty — run `interop refresh`")
-				return nil
-			}
-			fmt.Fprintf(out, "fetched: %s (%s ago)\n",
-				at.Format(time.RFC3339), time.Since(at).Round(time.Minute))
-
 			counts, err := db.Counts()
 			if err != nil {
 				return err
 			}
+
+			if g.jsonOut {
+				// An agent checks this before trusting anything else: where the data
+				// came from, how old it is, and whether there is any at all.
+				info := map[string]any{
+					"path":   db.Path(),
+					"empty":  at.IsZero(),
+					"counts": counts,
+				}
+				if !at.IsZero() {
+					info["fetchedAt"] = at.Format(time.RFC3339)
+					info["ageHours"] = int(time.Since(at).Hours())
+					info["stale"] = time.Since(at) > g.maxAge
+					if snap, err := db.Load(); err == nil {
+						info["coverage"] = coverageJSON(snap)
+					}
+				}
+				return emit(cmd, "cache", 1, info)
+			}
+
+			fmt.Fprintf(out, "path:    %s\n", db.Path())
+			if at.IsZero() {
+				fmt.Fprintln(out, "state:   empty — run `vkstack refresh`")
+				return nil
+			}
+			fmt.Fprintf(out, "fetched: %s (%s ago)\n",
+				at.Format(time.RFC3339), time.Since(at).Round(time.Minute))
 			fmt.Fprintf(out, "rows:    %d products, %d releases, %d compat edges\n\n",
 				counts["products"], counts["releases"], counts["compat"])
 
@@ -163,4 +181,25 @@ func newCacheClearCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// coverageJSON reports which product pairs the cache actually holds edges for. Three of
+// the ten are empty upstream by design, and a caller that cannot see that will read
+// "nothing compatible" as an answer when it is a gap.
+func coverageJSON(snap *store.Snapshot) []map[string]any {
+	counts := map[[2]int]int{}
+	for _, pc := range snap.Coverage {
+		counts[normalisePair(pc.AProduct, pc.BProduct)] = pc.EdgeCount
+	}
+	out := make([]map[string]any, 0, len(model.Pairs()))
+	for _, pr := range model.Pairs() {
+		first, _ := model.ByID(pr[0])
+		second, _ := model.ByID(pr[1])
+		a, b := model.OrderPair(first, second)
+		n := counts[normalisePair(pr[0], pr[1])]
+		out = append(out, map[string]any{
+			"a": a.Key, "b": b.Key, "edges": n, "published": n > 0,
+		})
+	}
+	return out
 }

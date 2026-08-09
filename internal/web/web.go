@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/warroyo/interop-visualizer/internal/graph"
-	"github.com/warroyo/interop-visualizer/internal/model"
+	"github.com/warroyo/vkstack/internal/graph"
+	"github.com/warroyo/vkstack/internal/model"
 )
 
 //go:embed all:assets
@@ -34,6 +34,9 @@ type Config struct {
 	// RefreshInterval is the server's own refresh cadence, reported to the UI so it can
 	// say when the data next updates. Zero means refreshes are on demand only.
 	RefreshInterval time.Duration
+	// Ledger records scheduled refresh attempts, so the UI can say whether the data is
+	// still moving rather than only how old it is. Optional.
+	Ledger *Ledger
 }
 
 // Server holds the handlers.
@@ -59,7 +62,6 @@ func NewServer(cfg Config) (http.Handler, error) {
 	mux.HandleFunc("GET /api/releases", s.handleReleases)
 	mux.HandleFunc("POST /api/stack", s.handleStack)
 	mux.HandleFunc("POST /api/check", s.handleCheck)
-	mux.HandleFunc("POST /api/plan", s.handlePlan)
 	mux.HandleFunc("GET /api/graph", s.handleGraph)
 	mux.HandleFunc("GET /api/stackmap", s.handleStackMap)
 	mux.HandleFunc("POST /api/refresh", s.handleRefresh)
@@ -124,6 +126,9 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.RefreshInterval > 0 {
 		resp["refreshInterval"] = s.cfg.RefreshInterval.String()
 	}
+	if ledger := s.cfg.Ledger.Snapshot(); ledger != nil {
+		resp["refresh"] = ledger
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -138,7 +143,7 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 		To      string `json:"to"`
 		Summary string `json:"summary"`
 		// Published is the only qualifier the screen carries. Everything else about how
-		// a claim is known lives in docs/model.md and `interop explain`; this view is a
+		// a claim is known lives in docs/model.md and `vkstack explain`; this view is a
 		// picture of the relationships, not a reference page.
 		Published bool `json:"published"`
 	}
@@ -199,9 +204,6 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 type pinsRequest struct {
 	Pins    map[string]string `json:"pins"`
 	Patches bool              `json:"patches"`
-	AllHops bool              `json:"allHops"`
-	From    map[string]string `json:"from"`
-	To      map[string]string `json:"to"`
 }
 
 func resolve(g *graph.Graph, in map[string]string) (map[int]*graph.Release, error) {
@@ -252,8 +254,12 @@ func (s *Server) handleStack(w http.ResponseWriter, r *http.Request) {
 		resp["ok"] = false
 		if failure != nil {
 			if failure.PinConflict {
-				resp["error"] = fmt.Sprintf("the pinned %s and %s versions cannot appear in the same stack",
-					failure.Against.Label, failure.BlockedProduct.Label)
+				reason := "cannot appear in the same stack"
+				if failure.Unlisted {
+					reason = "are never listed together by upstream, so they cannot appear in the same stack"
+				}
+				resp["error"] = fmt.Sprintf("the pinned %s and %s versions %s",
+					failure.Against.Label, failure.BlockedProduct.Label, reason)
 			} else if failure.Against.Key != "" {
 				resp["error"] = fmt.Sprintf("no %s release works with the pinned %s",
 					failure.BlockedProduct.Label, failure.Against.Label)
@@ -366,88 +372,5 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       res.OK(),
 		"verdicts": verdictsJSON(res.Pairs),
-	})
-}
-
-func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
-	g, err := s.cfg.Load()
-	if err != nil {
-		writeErr(w, http.StatusServiceUnavailable, err)
-		return
-	}
-	req, err := decode(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	current, err := resolve(g, req.From)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	target, err := resolve(g, req.To)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	if len(current) == 0 || len(target) == 0 {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("both a current and a target stack are required"))
-		return
-	}
-
-	plan, failure := g.Upgrade(current, target, graph.PlanOptions{
-		IncludePatches: req.Patches, AllHops: req.AllHops,
-	})
-	if plan == nil {
-		reached := map[string]string{}
-		if failure != nil {
-			for pid, rel := range failure.Reached {
-				p, _ := model.ByID(pid)
-				reached[p.Key] = rel.Raw
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":      false,
-			"error":   "no valid upgrade path found",
-			"reached": reached,
-		})
-		return
-	}
-
-	type stepJSON struct {
-		Product   string            `json:"product"`
-		From      string            `json:"from"`
-		To        string            `json:"to"`
-		Supported bool              `json:"supported"`
-		Blocking  string            `json:"blocking,omitempty"`
-		State     map[string]string `json:"state"`
-	}
-	type windowJSON struct {
-		Transitional bool       `json:"transitional"`
-		Steps        []stepJSON `json:"steps"`
-	}
-
-	var windows []windowJSON
-	for _, win := range plan.Windows() {
-		wj := windowJSON{Transitional: win.Transitional}
-		for _, st := range win.Steps {
-			sj := stepJSON{
-				Product: st.Product.Label, From: st.From.Raw, To: st.To.Raw,
-				Supported: st.Supported, Blocking: st.Blocking,
-				State: map[string]string{},
-			}
-			for _, p := range model.Products {
-				if rel := st.State[p.ID]; rel != nil {
-					sj.State[p.Key] = rel.Raw
-				}
-			}
-			wj.Steps = append(wj.Steps, sj)
-		}
-		windows = append(windows, wj)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"windows": windows,
-		"steps":   len(plan.Steps),
 	})
 }

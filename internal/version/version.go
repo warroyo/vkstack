@@ -11,12 +11,11 @@
 package version
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
+	"github.com/warroyo/vkstack/internal/model"
 )
 
 // Version is a parsed, comparable version. Key is a list of numeric runs compared
@@ -155,21 +154,6 @@ func K8sMinor(v Version, p model.Product) (int, bool) {
 		return 0, false
 	}
 	return run[1], true
-}
-
-// Line returns the coarse version line a release belongs to, used to prune upgrade hop
-// candidates down to "the latest release in each next line" rather than every patch.
-// For Kubernetes-tracking products that is the k8s minor; for ESX and vCenter it is
-// major.minor.update.
-func Line(v Version, p model.Product) string {
-	if minor, ok := K8sMinor(v, p); ok {
-		return fmt.Sprintf("k8s-1.%d", minor)
-	}
-	if len(v.Key) > 0 && len(v.Key[0]) >= 4 {
-		k := v.Key[0]
-		return fmt.Sprintf("%d.%d.%d-U%d", k[0], k[1], k[2], k[3])
-	}
-	return v.Raw
 }
 
 // letterOrdinal maps "" to 0 and a..z to 1..26, so an absent suffix sorts below "a".

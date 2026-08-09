@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/store"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
 )
 
 // TestCoverageMatchesUpstream compares the pair coverage in a real cache against the
@@ -13,12 +13,12 @@ import (
 //
 // It is the drift alarm: if upstream starts publishing Supervisor × VKr, or stops
 // publishing a pair we rely on, this fails and model.knownUnpublished needs updating.
-// Skipped unless INTEROP_TEST_CACHE points at a populated cache, so `go test ./...`
+// Skipped unless VKSTACK_TEST_CACHE points at a populated cache, so `go test ./...`
 // stays hermetic and offline.
 func TestCoverageMatchesUpstream(t *testing.T) {
-	path := os.Getenv("INTEROP_TEST_CACHE")
+	path := os.Getenv("VKSTACK_TEST_CACHE")
 	if path == "" {
-		t.Skip("set INTEROP_TEST_CACHE to a refreshed cache to check coverage against upstream")
+		t.Skip("set VKSTACK_TEST_CACHE to a refreshed cache to check coverage against upstream")
 	}
 
 	db, err := store.Open(path)
@@ -32,7 +32,7 @@ func TestCoverageMatchesUpstream(t *testing.T) {
 		t.Fatalf("loading cache: %v", err)
 	}
 	if len(snap.Coverage) == 0 {
-		t.Fatalf("cache at %s has no coverage rows — run `interop refresh`", path)
+		t.Fatalf("cache at %s has no coverage rows — run `vkstack refresh`", path)
 	}
 
 	actual := map[[2]int]bool{}

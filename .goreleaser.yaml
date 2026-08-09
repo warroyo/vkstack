@@ -1,0 +1,75 @@
+# Release configuration.
+#
+# The point of publishing binaries is that installing this should not require a Go
+# toolchain: an agent, or a person on a jump box, should be able to drop one file on PATH
+# and be done. No cgo means cross-compiling is honest — every artifact here is built from
+# the same source with nothing platform-specific behind it.
+version: 2
+
+project_name: vkstack
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: vkstack
+    main: ./cmd/vkstack
+    binary: vkstack
+    env:
+      # Static builds, so a binary works on a minimal image without a libc surprise.
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      # main.version is what `vkstack --version` reports and what the JSON envelope's
+      # `tool` field carries, so an agent can tell which build produced an answer.
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # Keep the archive name predictable so an install script can construct the URL
+    # without consulting the API.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - AGENTS.md
+      - LICENSE
+
+checksums:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  footer: |
+    ## Install
+
+    ```sh
+    go install github.com/warroyo/vkstack/cmd/vkstack@{{ .Tag }}
+    ```
+
+    Or download the archive for your platform above, then:
+
+    ```sh
+    vkstack refresh          # populate the local cache once (~1 min)
+    vkstack serve --open     # the map, for people
+    vkstack describe         # the agent-facing contract, as JSON
+    ```

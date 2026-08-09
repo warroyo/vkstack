@@ -1,7 +1,7 @@
 // Package graph holds the whole cache in memory and answers every compatibility
 // question from it. The dataset is small — a few hundred releases and ~70k edges — so
-// loading it whole beats issuing SQL per query, and it keeps the version floor and the
-// upgrade rules as load-time concerns rather than schema concerns.
+// loading it whole beats issuing SQL per query, and it keeps the version floor as a
+// load-time concern rather than a schema concern.
 package graph
 
 import (
@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/store"
-	"github.com/warroyo/interop-visualizer/internal/version"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
+	"github.com/warroyo/vkstack/internal/version"
 )
 
 // SupportPhase is where a release sits in its support lifecycle, as published by the

@@ -1,12 +1,13 @@
 package web
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/warroyo/interop-visualizer/internal/graph"
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/version"
+	"github.com/warroyo/vkstack/internal/graph"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/version"
 )
 
 // supRelease builds a Supervisor release in General Support. The support flags must be
@@ -240,5 +241,184 @@ func TestVsc0LabelsMakeNoProvenanceClaim(t *testing.T) {
 	}
 	if labels[0] != "v1.32.9+vmware.2-fips-vsc0.1.15" {
 		t.Errorf("expected the bare version, got %q", labels[0])
+	}
+}
+
+// Everything the client can send back as a pin has to resolve. Releases carries machine
+// identity — the pin token and the key the recommended stack is matched against — while
+// prose about a release belongs in Notes.
+//
+// Conflating the two made every lit Supervisor node unclickable: describeSupervisor's
+// decorated labels landed in Releases, the client posted one back as a version, and the
+// server answered 400 for a release that plainly exists. It happened on the second click
+// of a fresh session, since the map auto-pins the newest vCenter on arrival.
+func TestEveryNodePinResolves(t *testing.T) {
+	g := testGraph(t)
+	h := serverForGraph(t, g)
+
+	for _, path := range []string{
+		"/api/stackmap",
+		"/api/stackmap?product=vcenter&version=9.0.0.0",
+		"/api/stackmap?product=vcenter&version=8.0U3",
+		"/api/stackmap?product=supervisor&version=v1.33.0%2Bvmware.1-fips-vsc9.0.0.0",
+	} {
+		body := get(t, h, path)
+		for _, l := range body["layers"].([]any) {
+			layer := l.(map[string]any)
+			key := layer["key"].(string)
+			for _, n := range layer["nodes"].([]any) {
+				node := n.(map[string]any)
+				pin, _ := node["pin"].(string)
+				if pin == "" {
+					t.Errorf("%s: %s node %v has no pin token", path, key, node["id"])
+					continue
+				}
+				if _, err := g.Resolve(key, pin); err != nil {
+					t.Errorf("%s: pin %q on %v does not resolve: %v", path, pin, node["id"], err)
+				}
+				for _, r := range node["releases"].([]any) {
+					if _, err := g.Resolve(key, r.(string)); err != nil {
+						t.Errorf("%s: release %q on %v does not resolve: %v",
+							path, r, node["id"], err)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The decorated Supervisor labels still have to exist — they are the reason a reader can
+// tell one delivery from another. They just live where nothing sends them back.
+func TestSupervisorProseLivesInNotes(t *testing.T) {
+	g := testGraph(t)
+	h := serverForGraph(t, g)
+	body := get(t, h, "/api/stackmap?product=vcenter&version=9.0.0.0")
+
+	found := false
+	for _, l := range body["layers"].([]any) {
+		layer := l.(map[string]any)
+		if layer["key"] != "supervisor" {
+			continue
+		}
+		for _, n := range layer["nodes"].([]any) {
+			node := n.(map[string]any)
+			notes, _ := node["notes"].([]any)
+			for _, note := range notes {
+				if strings.Contains(note.(string), "vCenter 9.0.0.0") {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a Supervisor note naming the delivering vCenter")
+	}
+}
+
+// A grouped node keeps its best phase as its headline, because the line really is still
+// usable. It must also name its worst, or a green node covering an End of Support build
+// invites picking one blind.
+func TestNodePhaseNamesItsWorstReleaseToo(t *testing.T) {
+	general := supRelease("v1.30.14+vmware.8-fips-vsc9.1.0.0")
+	eos := supRelease("v1.30.5+vmware.4-fips-vsc9.0.0.0")
+	eos.GenGuided, eos.TechGuided = false, false
+
+	var node mapNode
+	setPhase(&node, []*graph.Release{general, eos})
+	switch {
+	case node.Phase != string(graph.PhaseGeneral):
+		t.Errorf("headline phase = %q, want general", node.Phase)
+	case node.WorstPhase != string(graph.PhaseEndOfSupport):
+		t.Errorf("worst phase = %q, want end-of-support", node.WorstPhase)
+	case !node.Mixed:
+		t.Error("a line holding both phases must be marked mixed")
+	case node.Legacy:
+		t.Error("a line with a generally supported release is not legacy")
+	}
+
+	setPhase(&node, []*graph.Release{general})
+	if node.Mixed || node.WorstPhase != string(graph.PhaseGeneral) {
+		t.Errorf("uniform line should not be mixed, got mixed=%v worst=%q",
+			node.Mixed, node.WorstPhase)
+	}
+}
+
+// ESX gates the Supervisor as much as vCenter does, so the hosts named on a vCenter node
+// have to be hosts for the whole selection. Listing every ESX release the vCenter pairs
+// with overstated the answer: it offered hosts that cannot carry the Supervisor on screen.
+func TestHostsNarrowThroughThePin(t *testing.T) {
+	g := testGraph(t)
+	vcRel, err := g.Resolve("vcenter", "8.0U3")
+	if err != nil {
+		t.Fatalf("resolving vCenter: %v", err)
+	}
+	supRel, err := g.Resolve("supervisor", "v1.33.0+vmware.1-fips-vsc9.0.0.0100")
+	if err != nil {
+		t.Fatalf("resolving Supervisor: %v", err)
+	}
+
+	unpinned := rawsOf(hostsWithPin(g, nil, []*graph.Release{vcRel}))
+	if !slices.Contains(unpinned, "8.0U3a") {
+		t.Fatalf("without a pin the pairwise hosts stand, got %v", unpinned)
+	}
+
+	pinned := rawsOf(hostsWithPin(g,
+		map[int]*graph.Release{supRel.ProductID: supRel}, []*graph.Release{vcRel}))
+	if slices.Contains(pinned, "8.0U3a") {
+		t.Errorf("8.0U3a cannot carry the pinned Supervisor but is still listed: %v", pinned)
+	}
+	if !slices.Contains(pinned, "8.0U3") {
+		t.Errorf("expected 8.0U3 to survive the pin, got %v", pinned)
+	}
+}
+
+// The map used to draw an identical empty frame for "nothing selected" and "this
+// selection has no complete stack". The second is an answer, so the response has to make
+// it distinguishable: a pin with no stack lights nothing and recommends nothing.
+func TestDeadEndPinIsDistinguishableFromNoPin(t *testing.T) {
+	h := serverForGraph(t, testGraph(t))
+
+	none := get(t, h, "/api/stackmap")
+	if _, ok := none["lit"]; ok {
+		t.Error("an unpinned map should not carry a lit set")
+	}
+
+	dead := get(t, h, "/api/stackmap?product=vkr&version=1.20.0")
+	lit, ok := dead["lit"].([]any)
+	if !ok {
+		t.Fatal("a pinned map must carry a lit set even when nothing is lit")
+	}
+	if len(lit) != 0 {
+		t.Errorf("VKr 1.20.0 reaches no stack, so nothing should be lit: %v", lit)
+	}
+	if _, ok := dead["recommended"]; ok {
+		t.Error("a dead end must not recommend a stack")
+	}
+}
+
+// The recommended stack has to carry the support phase of every release in it. The legacy
+// filter is a view setting and the solver reaches past it, so a recommendation can name a
+// release the map is hiding — which is only honest if the client can tell.
+func TestRecommendedStackCarriesPhases(t *testing.T) {
+	h := serverForGraph(t, testGraph(t))
+	body := get(t, h, "/api/stackmap?product=vcenter&version=9.0.0.0")
+
+	rec, ok := body["recommended"].(map[string]any)
+	if !ok {
+		t.Fatal("expected a recommended stack")
+	}
+	for key, v := range rec {
+		pick, ok := v.(map[string]any)
+		if !ok {
+			t.Fatalf("%s: recommendation is not an object: %T", key, v)
+		}
+		for _, field := range []string{"version", "phase", "phaseLabel"} {
+			if s, _ := pick[field].(string); s == "" {
+				t.Errorf("%s: recommendation is missing %s", key, field)
+			}
+		}
+	}
+	if _, ok := body["provenance"].(map[string]any); !ok {
+		t.Error("expected a provenance summary alongside the recommendation")
 	}
 }

@@ -11,9 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/warroyo/interop-visualizer/internal/graph"
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/store"
+	"github.com/warroyo/vkstack/internal/graph"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
 )
 
 // loadGraph opens the cache and builds the in-memory graph with the active floors.
@@ -27,7 +27,26 @@ func loadGraph() (*graph.Graph, error) {
 	if err := warnIfStale(db); err != nil {
 		return nil, err
 	}
+	rememberSnapshot(db)
 	return loadGraphFrom(db)
+}
+
+// rememberSnapshot records which cache an answer came from, so every JSON envelope can
+// say so. An agent cannot see the header a person reads in the UI, and a compatibility
+// answer is only as current as the data behind it.
+func rememberSnapshot(db *store.DB) {
+	at, err := db.FetchedAt()
+	if err != nil || at.IsZero() {
+		return
+	}
+	snapshotFn = func() *snapshotJSON {
+		age := time.Since(at)
+		return &snapshotJSON{
+			FetchedAt: at.Format(time.RFC3339),
+			AgeHours:  int(age.Hours()),
+			Stale:     age > g.maxAge,
+		}
+	}
 }
 
 // loadGraphFrom builds the graph from an already-open cache. `serve` holds one handle for
@@ -103,8 +122,13 @@ func newReleasesCmd() *cobra.Command {
 				releases = append(releases, r)
 			}
 
-			if g.jsonOut {
-				return writeJSON(cmd.OutOrStdout(), releases)
+			switch g.mode {
+			case OutputJSON:
+				return emit(cmd, "releases", 1, map[string]any{
+					"product": args[0], "releases": releases,
+				})
+			case OutputCSV:
+				return releasesCSV(cmd, p.Key, releases)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "VERSION\tTYPE\tGA\tSUPPORT")
@@ -132,6 +156,16 @@ func newProductsCmd() *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
+
+			switch g.mode {
+			case OutputJSON:
+				return emit(cmd, "products", 1, map[string]any{
+					"products": productsJSON(gr),
+					"pairs":    pairsJSON(gr),
+				})
+			case OutputCSV:
+				return productsCSV(cmd, gr)
+			}
 
 			tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "KEY\tPRODUCT\tID\tRELEASES\tFLOOR")
@@ -172,7 +206,7 @@ func newCompatCmd() *cobra.Command {
 		Long: `Show everything compatible with one release, grouped by product.
 
 This is the raw pairwise answer. For a whole valid stack from a single pinned version,
-use ` + "`interop stack`" + ` instead.`,
+use ` + "`vkstack stack`" + ` instead.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			gr, err := loadGraph()
@@ -191,17 +225,29 @@ use ` + "`interop stack`" + ` instead.`,
 				}
 			}
 			groups := gr.CompatibleWith(r, opts)
+			self, _ := model.ByID(r.ProductID)
 
-			if g.jsonOut {
-				return writeJSON(cmd.OutOrStdout(), groups)
+			switch g.mode {
+			case OutputJSON:
+				return emit(cmd, "compat", 1, map[string]any{
+					"product": self.Key, "version": r.Raw, "groups": groups,
+				})
+			case OutputCSV:
+				return compatCSV(cmd, self, r.Raw, groups)
 			}
 			out := cmd.OutOrStdout()
-			self, _ := model.ByID(r.ProductID)
 			fmt.Fprintf(out, "%s %s is compatible with:\n\n", self.Label, r.Raw)
 			for _, grp := range groups {
 				switch {
 				case !grp.Published:
 					fmt.Fprintf(out, "  %-12s no data published upstream — inferred only\n", grp.Product.Label+":")
+					continue
+				case len(grp.Releases) == 0 && grp.HiddenPatches > 0:
+					// Every compatible release was a patch, and patches are hidden by
+					// default. "nothing compatible" would be false — and it was, for
+					// Supervisor builds whose only compatible vCenters are patches.
+					fmt.Fprintf(out, "  %-12s %d compatible, all patch releases — pass --patches\n",
+						grp.Product.Label+":", grp.HiddenPatches)
 					continue
 				case len(grp.Releases) == 0:
 					fmt.Fprintf(out, "  %-12s nothing compatible\n", grp.Product.Label+":")
@@ -276,8 +322,11 @@ have no data by design.`,
 		}
 		res := gr.Check(pins)
 
+		if g.mode == OutputCSV {
+			return csvUnavailable("check")
+		}
 		if g.jsonOut {
-			if err := writeJSON(cmd.OutOrStdout(), res); err != nil {
+			if err := emit(cmd, "check", 1, checkJSON(res)); err != nil {
 				return err
 			}
 		} else {
@@ -315,7 +364,14 @@ have no data by design.`,
 			}
 		}
 		if !res.OK() {
-			return errSilentExit{}
+			// A valid question with the answer "no". The verdict has already been
+			// written to stdout, so the exit code carries the answer and nothing is
+			// printed twice.
+			return &CodedError{
+				Code: "stack_incompatible", Exit: ExitIncompatible, Silent: true,
+				Message: "the pinned stack has incompatible pairs",
+				Details: map[string]any{"incompatible": len(res.Incompatible())},
+			}
 		}
 		return nil
 	}
@@ -333,11 +389,6 @@ func verdictWord(v graph.PairVerdict) string {
 	}
 }
 
-// errSilentExit signals a non-zero exit without printing a second error line.
-type errSilentExit struct{}
-
-func (errSilentExit) Error() string { return "" }
-
 func newStackCmd() *cobra.Command {
 	var limit int
 	var patches bool
@@ -351,8 +402,8 @@ func newStackCmd() *cobra.Command {
 Pin as little as one version and the rest is filled in with the newest combination that
 is compatible on every published pair:
 
-  interop stack vcenter 8.0U3k
-  interop stack --vcenter 8.0U3k --vks 3.6.2
+  vkstack stack vcenter 8.0U3k
+  vkstack stack --vcenter 8.0U3k --vks 3.6.2
 
 Pairs upstream does not publish cannot constrain the answer; they are reported at the
 bottom so you know which parts of the stack are verified and which are inferred.`,
@@ -374,33 +425,54 @@ bottom so you know which parts of the stack are verified and which are inferred.
 			}
 			*vals[args[0]] = args[1]
 		} else if len(args) == 1 {
-			return fmt.Errorf("positional form is `interop stack <product> <version>`; got only %q", args[0])
+			return fmt.Errorf("positional form is `vkstack stack <product> <version>`; got only %q", args[0])
 		}
 		pins, err := resolvePins(gr, vals)
 		if err != nil {
 			return err
 		}
 		if len(pins) == 0 {
-			return fmt.Errorf("pin at least one version, e.g. `interop stack vcenter 8.0U3k`")
+			return fmt.Errorf("pin at least one version, e.g. `vkstack stack vcenter 8.0U3k`")
 		}
 
 		opts := graph.StackOptions{Limit: limit, IncludePatches: patches}
+		if g.mode == OutputCSV {
+			return csvUnavailable("stack")
+		}
 		stacks, failure := gr.Stacks(pins, opts)
 		if len(stacks) == 0 {
+			// "No stack exists" is an answer to a well-formed question, not a mistake by
+			// the caller, so it gets its own exit code and carries what blocked it.
+			err := codedErr("no_valid_stack", ExitNoStack, "no valid stack found for those pins")
 			switch {
+			case failure != nil && failure.PinConflict && failure.Unlisted:
+				err = codedErr("pins_never_listed_together", ExitNoStack,
+					"upstream publishes %s against %s but never lists those two releases together — they cannot appear in the same stack",
+					failure.Against.Label, failure.BlockedProduct.Label)
 			case failure != nil && failure.PinConflict:
-				return fmt.Errorf("the pinned %s and %s versions are %s — they cannot appear in the same stack",
+				err = codedErr("pins_incompatible", ExitNoStack,
+					"the pinned %s and %s versions are %s — they cannot appear in the same stack",
 					failure.Against.Label, failure.BlockedProduct.Label, statusWord(failure.Status))
 			case failure != nil && failure.Against.Key != "":
-				return fmt.Errorf("no valid stack: no %s release works with the pinned %s",
+				err = codedErr("no_candidate", ExitNoStack,
+					"no valid stack: no %s release works with the pinned %s",
 					failure.BlockedProduct.Label, failure.Against.Label)
 			}
-			return fmt.Errorf("no valid stack found for those pins")
+			if failure != nil {
+				err.Details = map[string]any{
+					"blockedProduct": failure.BlockedProduct.Key,
+					"against":        failure.Against.Key,
+					"pinConflict":    failure.PinConflict,
+					"neverListed":    failure.Unlisted,
+				}
+				err.Hint = "loosen a pin, or pass --patches to allow patch releases"
+			}
+			return err
 		}
 
 		if list {
 			if g.jsonOut {
-				return writeJSON(cmd.OutOrStdout(), stacksToJSON(stacks))
+				return emit(cmd, "stacks", 1, map[string]any{"stacks": stacksToJSON(stacks)})
 			}
 			printStacks(cmd.OutOrStdout(), stacks)
 			return nil
@@ -408,7 +480,7 @@ bottom so you know which parts of the stack are verified and which are inferred.
 
 		options := gr.ViableOptions(pins, opts)
 		if g.jsonOut {
-			return writeJSON(cmd.OutOrStdout(), buildRecommendationJSON(stacks[0], options))
+			return emit(cmd, "stack", 1, buildRecommendationJSON(stacks[0], options))
 		}
 		printRecommendation(cmd.OutOrStdout(), stacks[0], options)
 		return nil
@@ -571,6 +643,92 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// The JSON shapes below are the agent-facing contract. They are written by hand rather
+// than reflected off internal structs so that renaming a Go field cannot silently break
+// a consumer, and so every field can be given a name that means something on its own.
+
+func productsJSON(gr *graph.Graph) []map[string]any {
+	out := make([]map[string]any, 0, len(model.Products))
+	for _, p := range model.Products {
+		floor := p.MinVersion
+		entry := map[string]any{
+			"key":          p.Key,
+			"name":         p.Name,
+			"label":        p.Label,
+			"upstreamId":   p.ID,
+			"releases":     len(gr.ReleasesOf(p.ID)),
+			"upgradeOrder": p.UpgradeOrder,
+			"versionFloor": floor,
+		}
+		if floor == "" {
+			// No hardcoded floor: these products are filtered by reachability, so
+			// anything that only ever worked with an out-of-scope base drops out.
+			entry["versionFloor"] = nil
+			entry["floorBy"] = "reachability"
+		}
+		if len(p.Trains) > 0 {
+			entry["trains"] = p.Trains
+			entry["trainNote"] = p.TrainNote
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func pairsJSON(gr *graph.Graph) []map[string]any {
+	out := make([]map[string]any, 0, len(model.Pairs()))
+	for _, pr := range model.Pairs() {
+		first, _ := model.ByID(pr[0])
+		second, _ := model.ByID(pr[1])
+		a, b := model.OrderPair(first, second)
+		out = append(out, map[string]any{
+			"a":          a.Key,
+			"b":          b.Key,
+			"published":  gr.Published(pr[0], pr[1]),
+			"dependency": model.IsDependency(pr[0], pr[1]),
+		})
+	}
+	return out
+}
+
+// checkJSON renders a verdict so a caller can act on it without re-deriving anything: the
+// overall answer, then the pairs grouped by what kind of answer they are.
+func checkJSON(res graph.CheckResult) map[string]any {
+	pair := func(v graph.PairVerdict) map[string]any {
+		return map[string]any{
+			"a":          v.A.Key,
+			"b":          v.B.Key,
+			"aVersion":   v.ARelease.Raw,
+			"bVersion":   v.BRelease.Raw,
+			"dependency": v.Dependency,
+			"published":  v.Published,
+			"evaluated":  v.HasEdge,
+			"status":     v.Status,
+			"statusText": statusWord(v.Status),
+			"verdict":    verdictWord(v),
+			"footnotes":  v.Footnotes,
+		}
+	}
+	all := make([]map[string]any, 0, len(res.Pairs))
+	for _, v := range res.Pairs {
+		all = append(all, pair(v))
+	}
+	names := func(vs []graph.PairVerdict) []string {
+		out := make([]string, 0, len(vs))
+		for _, v := range vs {
+			out = append(out, v.A.Label+" × "+v.B.Label)
+		}
+		return out
+	}
+	return map[string]any{
+		"ok":            res.OK(),
+		"pairs":         all,
+		"incompatible":  names(res.Incompatible()),
+		"unverified":    names(res.Unverified()),
+		"informational": names(res.Informational()),
+	}
 }
 
 func gaDate(ms int64) string {

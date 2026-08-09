@@ -4,8 +4,8 @@ import (
 	"maps"
 	"sort"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/version"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/version"
 )
 
 // Stack is a complete, valid assignment of one release per product.
@@ -54,6 +54,9 @@ type StackFailure struct {
 	// PinConflict marks the case where two pinned versions are themselves
 	// incompatible, as opposed to the search running out of candidates.
 	PinConflict bool
+	// Unlisted marks a pin conflict where upstream publishes the pair but never listed
+	// these two releases together, as opposed to listing them as incompatible.
+	Unlisted bool
 	// Status is the offending compatibility status, set only for a pin conflict.
 	Status int
 }
@@ -79,7 +82,8 @@ func (g *Graph) Stacks(pins map[int]*Release, opts StackOptions) ([]Stack, *Stac
 	// incompatible pair of pins would sail through and produce a "valid" stack.
 	if v, ok := g.firstBadPin(pins); !ok {
 		return nil, &StackFailure{
-			BlockedProduct: v.B, Against: v.A, PinConflict: true, Status: v.Status,
+			BlockedProduct: v.B, Against: v.A, PinConflict: true,
+			Unlisted: !v.HasEdge, Status: v.Status,
 		}
 	}
 
@@ -121,10 +125,15 @@ func (g *Graph) Stacks(pins map[int]*Release, opts StackOptions) ([]Stack, *Stac
 	return nil, failure
 }
 
-// firstBadPin reports the first pinned dependency pair that is published and not
-// compatible. Unverified pairs pass, and non-dependency pairs are not enforced.
+// firstBadPin reports the first pinned dependency pair that cannot hold.
+//
+// Pins are held to the same standard as releases the solver picks itself: inside a
+// published pair, both an incompatible result and a missing one are a no. Anything looser
+// let two pinned releases the matrix never lists together produce a "valid" stack — a
+// combination the solver would refuse to assemble on its own. Pairs upstream publishes no
+// data for at all still pass; nothing can be enforced there.
 func (g *Graph) firstBadPin(pins map[int]*Release) (PairVerdict, bool) {
-	if bad := g.Check(pins).Incompatible(); len(bad) > 0 {
+	if bad := g.Check(pins).Blocking(); len(bad) > 0 {
 		return bad[0], false
 	}
 	return PairVerdict{}, true
@@ -216,6 +225,15 @@ func (g *Graph) snapshotStack(assigned, pins map[int]*Release) Stack {
 func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int][]*Release {
 	out := make(map[int][]*Release, len(model.Products))
 	probe := StackOptions{Limit: 1, IncludePatches: opts.IncludePatches}
+
+	// A pin that no complete stack can contain has no viable options anywhere, including
+	// itself. Returning the pin regardless made a dead end look like a one-node answer:
+	// the map lit the selection, and callers could not tell it apart from a real result.
+	if len(pins) > 0 {
+		if stacks, _ := g.Stacks(pins, probe); len(stacks) == 0 {
+			return out
+		}
+	}
 
 	for _, p := range model.Products {
 		if pinned, ok := pins[p.ID]; ok {

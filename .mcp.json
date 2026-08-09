@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vkstack": {
+      "command": "vkstack",
+      "args": ["mcp"]
+    }
+  }
+}

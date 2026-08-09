@@ -7,9 +7,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/warroyo/interop-visualizer/internal/graph"
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/version"
+	"github.com/warroyo/vkstack/internal/graph"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
+	"github.com/warroyo/vkstack/internal/version"
 )
 
 // The stack map is the main view: every layer of the stack at once, bottom-up, with the
@@ -106,8 +107,18 @@ type mapNode struct {
 	// Detail is the secondary line: compatible ESX versions for vCenter, or the number
 	// of builds behind a grouped line.
 	Detail string `json:"detail,omitempty"`
-	// Releases are the exact releases this node stands for.
+	// Releases are the exact releases this node stands for, verbatim as upstream
+	// publishes them. This field is machine-readable identity: it is what the client
+	// sends back as a pin and what it matches the recommended stack against, so nothing
+	// may ever decorate it. Prose about a release goes in Notes.
 	Releases []string `json:"releases"`
+	// Pin is the release selected by clicking this node — the newest one it stands for.
+	// Sent explicitly so the client never has to derive a pin from a display string.
+	Pin string `json:"pin,omitempty"`
+	// Notes are the releases rendered for a reader, one line each: where a build came
+	// from, whether it is out of General Support. Display only — never sent back, and
+	// not necessarily in Releases order, since the build a selection ships with leads.
+	Notes []string `json:"notes,omitempty"`
 	// Hosts are the ESX releases a vCenter node can run on. ESX is not a layer of its
 	// own: its lines mirror vCenter's and it has no data against VKS or VKr.
 	Hosts []string `json:"hosts,omitempty"`
@@ -120,12 +131,34 @@ type mapNode struct {
 	Phase string `json:"phase,omitempty"`
 	// PhaseLabel is Phase rendered for display.
 	PhaseLabel string `json:"phaseLabel,omitempty"`
+	// WorstPhase is the *worst* phase among the releases a node covers. A grouped node
+	// keeps its best phase as its headline — the line is still usable — but a green node
+	// holding End of Support builds has to say so, or picking from it is a guess.
+	WorstPhase string `json:"worstPhase,omitempty"`
+	// WorstPhaseLabel is WorstPhase rendered for display.
+	WorstPhaseLabel string `json:"worstPhaseLabel,omitempty"`
+	// Mixed marks a node whose releases do not all sit in the same support phase.
+	Mixed bool `json:"mixed,omitempty"`
 	// Legacy marks a node with nothing left in General Support — what the interop
 	// site's "hide legacy releases" checkbox removes.
 	Legacy bool `json:"legacy,omitempty"`
 	// NoData marks a release upstream has published nothing for yet — usually one that
 	// has not shipped. Distinct from "nothing is compatible".
 	NoData bool `json:"noData,omitempty"`
+	// Untested marks a node whose own product is joined to the selection by a result
+	// upstream flags "compatible, not tested". The solver counts those as a yes, so
+	// without this the picture presents them as though somebody had run them.
+	Untested bool `json:"untested,omitempty"`
+	// Unverified marks a node whose own product is joined to the rest of the stack by a
+	// pair upstream never evaluated. Lit on trust rather than on a lookup.
+	Unverified bool `json:"unverified,omitempty"`
+	// Provenance spells out, pair by pair, where the warrant for this node is weaker
+	// than a tested lookup — including pairs elsewhere in the stack it is lit through,
+	// which is why the flags above are not the whole story.
+	Provenance []string `json:"provenance,omitempty"`
+	// Footnotes are the upstream caveats attached to the result linking this node to the
+	// selection. Published by the matrix, and dropped everywhere until now.
+	Footnotes []string `json:"footnotes,omitempty"`
 }
 
 type mapLayer struct {
@@ -180,15 +213,20 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 			for _, rel := range members {
 				node.Releases = append(node.Releases, rel.Raw)
 			}
+			node.Notes = phaseNotes(members)
+			setPin(&node)
+			// Upstream publishes nothing at all for some releases — normally ones that
+			// have not shipped. That is not the same as "nothing is compatible", and it
+			// happens on every layer, not only on vCenter.
+			node.NoData = !hasAnyCompatible(g, members)
 			switch {
 			case p.Key == "vcenter":
-				hosts := hostsFor(g, members)
-				node.Hosts = hosts
+				hosts := hostCandidates(g, members)
+				node.Hosts = rawsOf(hosts)
 				// Listing every host patch is unreadable — a vCenter release can run
 				// nineteen of them. Collapse to the host lines; the exact list stays
 				// available on hover.
-				node.Detail = joinLimited(hostLines(g, members), 3)
-				node.NoData = len(hosts) == 0 && !hasAnyCompatible(g, members)
+				node.Detail = joinLimited(linesOf(hosts), 3)
 			case len(members) > 1:
 				node.Detail = fmt.Sprintf("%d builds", len(members))
 			}
@@ -240,18 +278,30 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 				vcenterReleases[r.Raw] = true
 			}
 		}
-		narrowNodes(layers, viable, pinnedVCenter, vcenterReleases)
+		narrowNodes(g, layers, pins, viable, pinnedVCenter, vcenterReleases)
 		resp["edges"] = adjacentEdges(g, pins, order, layers, lit, nodeReleases)
 
-		// The exact hosts for the pinned vCenter, so the base node can state them.
+		// The newest stack the solver can build from here, with the support phase of
+		// every release in it. The phase matters because the legacy filter is a view
+		// setting: the solver still reaches past it, so a recommendation can name a
+		// release the map is hiding, and it has to say so rather than look ordinary.
 		if best, _ := g.Stacks(pins, graph.StackOptions{Limit: 1, IncludePatches: true}); len(best) > 0 {
-			recommended := map[string]string{}
+			recommended := map[string]any{}
 			for _, p := range model.Products {
-				if rel := best[0].Releases[p.ID]; rel != nil {
-					recommended[p.Key] = rel.Raw
+				rel := best[0].Releases[p.ID]
+				if rel == nil {
+					continue
+				}
+				phase := rel.Phase()
+				recommended[p.Key] = map[string]any{
+					"version":    rel.Raw,
+					"phase":      string(phase),
+					"phaseLabel": phase.Label(),
+					"legacy":     !phase.Supported(),
 				}
 			}
 			resp["recommended"] = recommended
+			resp["provenance"] = summarizeProvenance(best[0])
 		}
 	}
 
@@ -260,8 +310,15 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 
 // narrowNodes rewrites each lit node to hold only the releases that work with the
 // current pin, so a build count never claims more support than the matrix gives.
+//
+// Releases stays raw throughout: it is the pin token and the key the client matches the
+// recommended stack against. Everything written for a reader goes to Notes. Conflating
+// the two made every lit Supervisor node unclickable, because the decorated string was
+// sent back as a version and no release matched it.
 func narrowNodes(
+	g *graph.Graph,
 	layers []mapLayer,
+	pins map[int]*graph.Release,
 	viable map[string][]*graph.Release,
 	pinnedVCenter string,
 	vcenterReleases map[string]bool,
@@ -280,11 +337,20 @@ func narrowNodes(
 			}
 			// The surviving releases may sit in a different phase from the full line.
 			setPhase(node, rels)
+			node.Notes = phaseNotes(rels)
+			setPin(node)
+			setProvenance(g, node, pins, rels)
 			switch {
 			case layers[li].Key == "vcenter":
-				// vCenter nodes are single releases and keep their ESX annotation.
+				// A vCenter node is one release, and it keeps its ESX annotation — but
+				// the hosts have to answer the question being asked. ESX gates the
+				// Supervisor as much as vCenter does, so with something pinned above,
+				// the hosts that cannot carry it are not hosts for this selection.
+				hosts := hostsWithPin(g, pins, rels)
+				node.Hosts = rawsOf(hosts)
+				node.Detail = joinLimited(linesOf(hosts), 3)
 			case layers[li].Key == "supervisor":
-				node.Detail, node.Releases = describeSupervisor(rels, pinnedVCenter, vcenterReleases)
+				node.Detail, node.Notes = describeSupervisor(rels, pinnedVCenter, vcenterReleases)
 			case len(node.Releases) < total:
 				node.Detail = fmt.Sprintf("%d of %d versions", len(node.Releases), total)
 			case len(node.Releases) > 1:
@@ -292,6 +358,83 @@ func narrowNodes(
 			default:
 				node.Detail = ""
 			}
+		}
+	}
+}
+
+// setPin records the release a click on this node selects: the newest it stands for,
+// which is the first, since every list here is newest-first.
+func setPin(node *mapNode) {
+	if len(node.Releases) > 0 {
+		node.Pin = node.Releases[0]
+		return
+	}
+	node.Pin = ""
+}
+
+// phaseNotes renders one line per release, flagging the ones that are out of General
+// Support. A grouped node can hold both, and the peek list is where that becomes visible.
+func phaseNotes(rels []*graph.Release) []string {
+	out := make([]string, 0, len(rels))
+	for _, r := range rels {
+		note := r.Raw
+		if p := r.Phase(); !p.Supported() {
+			note += " · " + p.Label()
+		}
+		out = append(out, note)
+	}
+	return out
+}
+
+// setProvenance records how well-founded a lit node actually is.
+//
+// Lit means a complete valid stack exists. It does not mean every pair in that stack was
+// tested, or even evaluated: the solver counts "compatible, not tested" as a yes and
+// cannot enforce pairs upstream never published. Both are defensible; presenting them as
+// a plain yes is not.
+//
+// A node is flagged only for pairs its own product is party to — a VKS node tagged "not
+// tested" because of something two layers down would be read as a claim about VKS. The
+// rest of the stack's weak spots are still reported, in words, as belonging to the stack.
+// The check runs against the newest stack the solver can build through this node, which
+// is the stack a click on it leads to.
+func setProvenance(g *graph.Graph, node *mapNode, pins map[int]*graph.Release, rels []*graph.Release) {
+	trial := make(map[int]*graph.Release, len(pins)+1)
+	for k, v := range pins {
+		trial[k] = v
+	}
+	best := (*graph.Stack)(nil)
+	for _, r := range rels {
+		trial[r.ProductID] = r
+		if stacks, _ := g.Stacks(trial, graph.StackOptions{Limit: 1, IncludePatches: true}); len(stacks) > 0 {
+			best = &stacks[0]
+			break
+		}
+	}
+	if best == nil {
+		return
+	}
+	productKey := rels[0].ProductKey
+	seen := map[string]bool{}
+	for _, v := range best.Verdicts {
+		if !v.Dependency {
+			continue // published for reference, never enforced; not this node's warrant
+		}
+		own := v.A.Key == productKey || v.B.Key == productKey
+		pair := v.A.Label + " × " + v.B.Label
+		switch {
+		case v.Unverified():
+			node.Unverified = node.Unverified || own
+			node.Provenance = append(node.Provenance, pair+
+				" was never evaluated upstream — that link is inferred")
+		case v.Status == store.StatusCompatibleNT:
+			node.Untested = node.Untested || own
+			node.Provenance = append(node.Provenance, pair+
+				" is listed compatible but not tested")
+		}
+		if v.Footnotes != "" && !seen[v.Footnotes] {
+			seen[v.Footnotes] = true
+			node.Footnotes = append(node.Footnotes, pair+": "+v.Footnotes)
 		}
 	}
 }
@@ -408,13 +551,13 @@ func adjacentEdges(
 	layers []mapLayer,
 	lit map[string]bool,
 	nodeReleases map[string][]*graph.Release,
-) []map[string]string {
+) []mapEdge {
 	byKey := map[string]mapLayer{}
 	for _, l := range layers {
 		byKey[l.Key] = l
 	}
 
-	var out []map[string]string
+	var out []mapEdge
 	probe := graph.StackOptions{Limit: 1, IncludePatches: true}
 
 	for i := 0; i+1 < len(order); i++ {
@@ -427,23 +570,101 @@ func adjacentEdges(
 				if !lit[b.ID] {
 					continue
 				}
-				if stackExistsWith(g, pins, nodeReleases[a.ID], nodeReleases[b.ID], probe) {
-					out = append(out, map[string]string{"from": a.ID, "to": b.ID})
+				ra, rb, ok := stackExistsWith(g, pins, nodeReleases[a.ID], nodeReleases[b.ID], probe)
+				if !ok {
+					continue
 				}
+				out = append(out, describeEdge(g, a.ID, b.ID, ra, rb))
 			}
 		}
 	}
 	return out
 }
 
+// mapEdge is one connection to draw, with the provenance of the result behind it.
+//
+// Every edge used to be a bare from/to pair, drawn identically whether the matrix had
+// tested the combination, merely called it compatible, or never evaluated these two
+// releases at all. The picture cannot claim more than the data, so the difference travels
+// with the edge.
+type mapEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	// Untested is set for status 3, "compatible, not tested": upstream's own hedge.
+	Untested bool `json:"untested,omitempty"`
+	// Unverified is set when the two releases behind this edge were never evaluated
+	// against each other — the edge is drawn because a stack exists, not because the
+	// pair was looked up.
+	Unverified bool `json:"unverified,omitempty"`
+	// Footnote is the upstream caveat on the result, verbatim.
+	Footnote string `json:"footnote,omitempty"`
+	// Releases names the two releases the verdict is about, so a reader can tell which
+	// members of two grouped nodes the connection is actually about.
+	Releases []string `json:"releases,omitempty"`
+}
+
+// describeEdge reads the matrix's own verdict for the pair a connection rests on.
+func describeEdge(g *graph.Graph, fromID, toID string, ra, rb *graph.Release) mapEdge {
+	e := mapEdge{From: fromID, To: toID, Releases: []string{ra.Raw, rb.Raw}}
+	status, ok := g.Status(ra.ID, rb.ID)
+	switch {
+	case !g.Published(ra.ProductID, rb.ProductID) || !ok:
+		// Adjacent layers are all dependency pairs, so a missing edge here means the
+		// solver had nothing to enforce and the connection is taken on trust.
+		e.Unverified = true
+	case status == store.StatusCompatibleNT:
+		e.Untested = true
+	}
+	for _, edge := range g.Compat[ra.ID] {
+		if edge.Peer == rb.ID {
+			e.Footnote = edge.Footnotes
+			break
+		}
+	}
+	return e
+}
+
+// summarizeProvenance counts how much of a stack is a lookup and how much is trust.
+func summarizeProvenance(s graph.Stack) map[string]any {
+	verified, untested := 0, 0
+	var inferred, untestedPairs, footnotes []string
+	for _, v := range s.Verdicts {
+		if !v.Dependency {
+			continue // published for reference, never enforced
+		}
+		name := v.A.Label + " × " + v.B.Label
+		switch {
+		case v.Unverified():
+			inferred = append(inferred, name)
+		case v.Status == store.StatusCompatibleNT:
+			untested++
+			untestedPairs = append(untestedPairs, name)
+		default:
+			verified++
+		}
+		if v.Footnotes != "" {
+			footnotes = append(footnotes, name+": "+v.Footnotes)
+		}
+	}
+	return map[string]any{
+		"verified":      verified,
+		"untested":      untested,
+		"pairs":         verified + untested + len(inferred),
+		"inferredPairs": inferred,
+		"untestedPairs": untestedPairs,
+		"footnotes":     footnotes,
+	}
+}
+
 // stackExistsWith reports whether any release of a and any release of b can appear in a
-// complete valid stack together with the pins.
+// complete valid stack together with the pins, and returns the pair that worked so the
+// caller can read the matrix's verdict for it.
 func stackExistsWith(
 	g *graph.Graph,
 	pins map[int]*graph.Release,
 	as, bs []*graph.Release,
 	opts graph.StackOptions,
-) bool {
+) (*graph.Release, *graph.Release, bool) {
 	trial := make(map[int]*graph.Release, len(pins)+2)
 	for _, a := range as {
 		for _, b := range bs {
@@ -454,11 +675,11 @@ func stackExistsWith(
 			trial[a.ProductID] = a
 			trial[b.ProductID] = b
 			if stacks, _ := g.Stacks(trial, opts); len(stacks) > 0 {
-				return true
+				return a, b, true
 			}
 		}
 	}
-	return false
+	return nil, nil, false
 }
 
 // setPhase records the support lifecycle of a node from the releases behind it.
@@ -469,31 +690,55 @@ func stackExistsWith(
 //
 // A node takes the best phase among its releases: a version line is still generally
 // supported while any release in it is.
+//
+// The best phase alone is not the whole truth, though. One node can cover five builds
+// where the newest is in General Support and the oldest is End of Support, and a plain
+// green node invites picking any of them. So the worst phase is recorded alongside, and
+// a node whose releases disagree is marked mixed.
 func setPhase(node *mapNode, members []*graph.Release) {
-	best := graph.PhaseEndOfSupport
+	best, worst := graph.PhaseEndOfSupport, graph.PhaseGeneral
 	for _, r := range members {
-		switch r.Phase() {
-		case graph.PhaseGeneral:
-			best = graph.PhaseGeneral
-		case graph.PhaseTechnicalGuidance:
-			if best != graph.PhaseGeneral {
-				best = graph.PhaseTechnicalGuidance
-			}
+		p := r.Phase()
+		if phaseRank(p) > phaseRank(best) {
+			best = p
+		}
+		if phaseRank(p) < phaseRank(worst) {
+			worst = p
 		}
 	}
 	node.Phase = string(best)
 	node.PhaseLabel = best.Label()
+	node.WorstPhase = string(worst)
+	node.WorstPhaseLabel = worst.Label()
+	node.Mixed = best != worst
 	node.Legacy = !best.Supported()
 }
 
-// hostsFor lists the ESX releases compatible with any of the given vCenter releases.
-// ESX rides along on the vCenter node rather than occupying a layer of its own.
-func hostsFor(g *graph.Graph, vcenters []*graph.Release) []string {
+// phaseRank orders the lifecycle so best and worst are comparable. Higher is better.
+func phaseRank(p graph.SupportPhase) int {
+	switch p {
+	case graph.PhaseGeneral:
+		return 2
+	case graph.PhaseTechnicalGuidance:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// hostCandidates lists the ESX releases compatible with any of the given vCenter
+// releases, newest first. ESX rides along on the vCenter node rather than occupying a
+// layer of its own.
+//
+// This is the pairwise answer only. With something pinned above vCenter, use
+// hostsWithPin: ESX gates the Supervisor too, so being compatible with the vCenter is
+// not enough to be a host for the stack on screen.
+func hostCandidates(g *graph.Graph, vcenters []*graph.Release) []*graph.Release {
 	esx, ok := model.ByKey("esx")
 	if !ok {
 		return nil
 	}
-	seen := map[string]bool{}
+	seen := map[int]bool{}
 	var out []*graph.Release
 	for _, vc := range vcenters {
 		for _, e := range g.Compat[vc.ID] {
@@ -501,8 +746,8 @@ func hostsFor(g *graph.Graph, vcenters []*graph.Release) []string {
 			if peer == nil || peer.ProductID != esx.ID || !graph.Compatible(e.Status) {
 				continue
 			}
-			if !seen[peer.Raw] {
-				seen[peer.Raw] = true
+			if !seen[peer.ID] {
+				seen[peer.ID] = true
 				out = append(out, peer)
 			}
 		}
@@ -510,33 +755,62 @@ func hostsFor(g *graph.Graph, vcenters []*graph.Release) []string {
 	sort.Slice(out, func(i, j int) bool {
 		return version.Compare(out[i].Version, out[j].Version) > 0
 	})
-	labels := make([]string, 0, len(out))
-	for _, r := range out {
-		labels = append(labels, r.Raw)
-	}
-	return labels
+	return out
 }
 
-// hostLines collapses compatible ESX releases to their version lines: "9.1", "9.0",
-// "8.0U3". That is the granularity anyone picking a host actually cares about.
-func hostLines(g *graph.Graph, vcenters []*graph.Release) []string {
-	esx, ok := model.ByKey("esx")
-	if !ok {
-		return nil
+// hostsWithPin narrows the hosts on a vCenter node to the ones that can carry the whole
+// selected stack, not merely that vCenter.
+//
+// ESX -> Supervisor is an enforced dependency: the Supervisor control plane runs on the
+// hosts. Listing every ESX release the vCenter pairs with therefore overstates the
+// answer whenever something above vCenter is pinned — pin Supervisor 1.33 and the
+// unnarrowed list offers eleven ESX patches for a Supervisor the matrix publishes
+// against one of them. Each candidate is put through the same solver that decides
+// whether a node is lit, so the annotation and the recommended stack cannot disagree.
+func hostsWithPin(g *graph.Graph, pins map[int]*graph.Release, vcenters []*graph.Release) []*graph.Release {
+	candidates := hostCandidates(g, vcenters)
+	if len(pins) == 0 {
+		return candidates
 	}
+	probe := graph.StackOptions{Limit: 1, IncludePatches: true}
+	trial := make(map[int]*graph.Release, len(pins)+2)
+	var out []*graph.Release
+	for _, host := range candidates {
+		for _, vc := range vcenters {
+			clear(trial)
+			for k, v := range pins {
+				trial[k] = v
+			}
+			trial[vc.ProductID] = vc
+			trial[host.ProductID] = host
+			if stacks, _ := g.Stacks(trial, probe); len(stacks) > 0 {
+				out = append(out, host)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// rawsOf renders releases as the strings upstream publishes.
+func rawsOf(rels []*graph.Release) []string {
+	out := make([]string, 0, len(rels))
+	for _, r := range rels {
+		out = append(out, r.Raw)
+	}
+	return out
+}
+
+// linesOf collapses releases to their version lines: "9.1", "9.0", "8.0U3". That is the
+// granularity anyone picking a host actually cares about.
+func linesOf(rels []*graph.Release) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, vc := range vcenters {
-		for _, e := range g.Compat[vc.ID] {
-			peer := g.Releases[e.Peer]
-			if peer == nil || peer.ProductID != esx.ID || !graph.Compatible(e.Status) {
-				continue
-			}
-			line := vsphereLine(peer)
-			if !seen[line] {
-				seen[line] = true
-				out = append(out, line)
-			}
+	for _, r := range rels {
+		line := vsphereLine(r)
+		if !seen[line] {
+			seen[line] = true
+			out = append(out, line)
 		}
 	}
 	return out

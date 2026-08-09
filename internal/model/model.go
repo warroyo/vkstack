@@ -1,6 +1,6 @@
 // Package model holds the conceptual dependency model: which products exist, how they
 // relate, and why. It is the single source of truth behind the mermaid diagram, the
-// generated docs/model.md, `interop explain`, and the web whiteboard view.
+// generated docs/model.md, `vkstack explain`, and the web whiteboard view.
 //
 // The prose here is authored domain knowledge, not derived from the API. The version
 // evidence supports the Supervisor<->vCenter coupling (versions embed the vCenter line,
@@ -116,7 +116,7 @@ type Edge struct {
 	// Summary is the one-line version, for the on-screen explainer. Generic and short:
 	// the shape of the relationship, not its details.
 	Summary string
-	// Prose is the full explanation, for the generated doc and `interop explain`.
+	// Prose is the full explanation, for the generated doc and `vkstack explain`.
 	Prose string
 	// Bidirectional marks a mutual version-pairing constraint rather than a
 	// "this one determines that one" direction.

@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/warroyo/interop-visualizer/internal/model"
-	"github.com/warroyo/interop-visualizer/internal/version"
+	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/version"
 )
 
 // AmbiguousError reports a version string that matched more than one release.
@@ -22,6 +22,23 @@ func (e *AmbiguousError) Error() string {
 		e.Input, len(e.Candidates), e.Product, strings.Join(e.Candidates, ", "))
 }
 
+// NotFoundError reports a version string that matched no release.
+//
+// Typed rather than formatted, because callers need to tell "you asked about something
+// that does not exist" apart from every other failure — a person reads the message, a
+// program reads the fields.
+type NotFoundError struct {
+	Product string
+	Input   string
+	// Newest is the newest release that does exist, as a starting point.
+	Newest string
+}
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("no %s release matches %q (newest available: %s)",
+		e.Product, e.Input, e.Newest)
+}
+
 // Resolve finds the release of a product matching a user-supplied version string.
 // Tries exact match first, then unique prefix. Ambiguity is an error rather than a guess.
 func (g *Graph) Resolve(productKey, input string) (*Release, error) {
@@ -31,7 +48,7 @@ func (g *Graph) Resolve(productKey, input string) (*Release, error) {
 	}
 	releases := g.ReleasesOf(p.ID)
 	if len(releases) == 0 {
-		return nil, fmt.Errorf("no %s releases in the cache — run `interop refresh`", p.Label)
+		return nil, fmt.Errorf("no %s releases in the cache — run `vkstack refresh`", p.Label)
 	}
 
 	input = strings.TrimSpace(input)
@@ -51,8 +68,9 @@ func (g *Graph) Resolve(productKey, input string) (*Release, error) {
 	case 1:
 		return matches[0], nil
 	case 0:
-		return nil, fmt.Errorf("no %s release matches %q (newest available: %s)",
-			p.Label, input, releases[len(releases)-1].Raw)
+		return nil, &NotFoundError{
+			Product: p.Label, Input: input, Newest: releases[len(releases)-1].Raw,
+		}
 	default:
 		// Prefer the newest when every match shares a version and differs only by id,
 		// otherwise make the caller disambiguate.
@@ -71,6 +89,10 @@ type CompatGroup struct {
 	// Rendered as "no data", never as an empty compatible list.
 	Published bool
 	Releases  []CompatHit
+	// HiddenPatches counts compatible releases dropped by the patch filter. Without it,
+	// a product whose only compatible releases are patches reads as "nothing
+	// compatible", which is a different and false claim.
+	HiddenPatches int
 }
 
 // CompatHit is one compatible peer release.
@@ -100,12 +122,14 @@ func (o CompatOptions) allows(status int) bool {
 // unpublished, so the gap is visible rather than looking like "nothing works".
 func (g *Graph) CompatibleWith(r *Release, opts CompatOptions) []CompatGroup {
 	hits := map[int][]CompatHit{}
+	hiddenPatches := map[int]int{}
 	for _, e := range g.Compat[r.ID] {
 		peer := g.Releases[e.Peer]
 		if peer == nil || !opts.allows(e.Status) {
 			continue
 		}
 		if peer.IsPatch() && !opts.IncludePatches {
+			hiddenPatches[peer.ProductID]++
 			continue
 		}
 		hits[peer.ProductID] = append(hits[peer.ProductID], CompatHit{
@@ -118,7 +142,12 @@ func (g *Graph) CompatibleWith(r *Release, opts CompatOptions) []CompatGroup {
 		if p.ID == r.ProductID {
 			continue
 		}
-		group := CompatGroup{Product: p, Published: g.Published(r.ProductID, p.ID), Releases: hits[p.ID]}
+		group := CompatGroup{
+			Product:       p,
+			Published:     g.Published(r.ProductID, p.ID),
+			Releases:      hits[p.ID],
+			HiddenPatches: hiddenPatches[p.ID],
+		}
 		sort.Slice(group.Releases, func(i, j int) bool {
 			return version.Compare(group.Releases[i].Release.Version, group.Releases[j].Release.Version) > 0
 		})
@@ -166,6 +195,27 @@ func (c CheckResult) Incompatible() []PairVerdict {
 	var out []PairVerdict
 	for _, p := range c.Pairs {
 		if p.Dependency && !p.Unverified() && !Compatible(p.Status) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// Blocking returns the dependency pairs that cannot appear in one stack.
+//
+// This is stricter than Incompatible, and deliberately: inside a pair upstream publishes,
+// a missing cell is the matrix declining to list the two releases together, not an open
+// question. The solver has always read it that way when choosing releases — consistent()
+// rejects a release whose cell against an assigned one is absent — so validating pinned
+// releases any other way let a pin pair through that the solver would never have picked,
+// and the map lit peers a release was never published against.
+//
+// Unverified pairs whose *product pair* upstream does not publish at all are a different
+// thing and still pass: three of the ten have no data by design.
+func (c CheckResult) Blocking() []PairVerdict {
+	var out []PairVerdict
+	for _, p := range c.Pairs {
+		if p.Dependency && p.Published && (!p.HasEdge || !Compatible(p.Status)) {
 			out = append(out, p)
 		}
 	}

@@ -368,8 +368,8 @@ function showPeek(anchor, layer, node) {
   }
   if (node.train) {
     lines.unshift(node.train === "vsc9"
-      ? "Train vsc9 — ships with vCenter 9.x"
-      : `Train ${node.train} — versioned independently of vCenter`);
+      ? "Train vsc9 — these versions ship with vCenter 9.x"
+      : `Train ${node.train} — numbered separately from vCenter`);
   }
   if (layer.key === "vcenter" && node.hosts?.length) {
     lines.unshift(`Runs on ESX: ${node.hosts.join(", ")}`);

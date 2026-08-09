@@ -296,28 +296,21 @@ func narrowNodes(
 	}
 }
 
-// deliveryPhrase names where a Supervisor build came from, in terms that are true for
-// the train it is on.
+// deliveryPhrase names where a Supervisor build came from, but only when that can be
+// checked.
 //
-// The two trains number themselves differently, and calling both a "vSphere release"
-// only works for one of them:
+// "vsc9.1.0.0200" is literally vCenter 9.1.0.0200, and saying so is verifiable — the
+// value is matched against the cached vCenter releases, not inferred from its shape.
+// One value in the data, 9.0.0.0100, looks like a vCenter patch and matches none.
 //
-//   - vsc9.x is a vCenter version. "vsc9.1.0.0200" is literally vCenter 9.1.0.0200, and
-//     that is verified against the cached vCenter releases rather than assumed — one
-//     value, 9.0.0.0100, matches no vCenter release we hold.
-//   - vsc0.x is the async train's own sequence. "0.1.15" is not a vSphere version at
-//     all, and reading it as one is meaningless.
+// The vsc0.x sequence is something else, and what exactly is not established. Rather
+// than narrate a guess, nothing is claimed: the release string already carries the tail,
+// so the reader sees the identifier without being told a story about it.
 func deliveryPhrase(vsc string, vcenterReleases map[string]bool) string {
-	switch {
-	case vsc == "":
-		return ""
-	case vcenterReleases[vsc]:
+	if vsc != "" && vcenterReleases[vsc] {
 		return "vCenter " + vsc
-	case strings.HasPrefix(vsc, "0."):
-		return "Supervisor async release " + vsc
-	default:
-		return "vSphere " + vsc
 	}
+	return ""
 }
 
 // describeSupervisor explains a Supervisor node in the terms that actually apply.

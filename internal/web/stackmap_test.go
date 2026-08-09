@@ -207,9 +207,12 @@ func TestNonDependencyPairsDoNotAdmitAStack(t *testing.T) {
 func TestDeliveryPhraseIsTrainAware(t *testing.T) {
 	vcs := map[string]bool{"9.1.0.0200": true}
 	for _, tc := range []struct{ vsc, want string }{
-		{"9.1.0.0200", "vCenter 9.1.0.0200"},          // verified against real releases
-		{"0.1.15", "Supervisor async release 0.1.15"}, // the async train's own sequence
-		{"9.0.0.0100", "vSphere 9.0.0.0100"},          // looks like 9.x, matches no vCenter release
+		{"9.1.0.0200", "vCenter 9.1.0.0200"}, // verified against real releases
+		// Nothing is claimed for values that match no vCenter release. What the vsc0
+		// sequence denotes is not established, and 9.0.0.0100 is 9.x-shaped but matches
+		// nothing, so both stay unnarrated.
+		{"0.1.15", ""},
+		{"9.0.0.0100", ""},
 		{"", ""},
 	} {
 		if got := deliveryPhrase(tc.vsc, vcs); got != tc.want {
@@ -218,8 +221,10 @@ func TestDeliveryPhraseIsTrainAware(t *testing.T) {
 	}
 }
 
-// On the async train nothing "ships with" a vCenter, so the label must not imply it.
-func TestAsyncTrainLabelsAvoidVCenterFraming(t *testing.T) {
+// The vsc0 sequence does not correspond to a vCenter release, and what it does denote is
+// not established. Labels must state the version and nothing more — no invented
+// provenance, and no vCenter framing that does not apply.
+func TestVsc0LabelsMakeNoProvenanceClaim(t *testing.T) {
 	rels := []*graph.Release{
 		supRelease("v1.32.9+vmware.2-fips-vsc0.1.15"),
 		supRelease("v1.32.9+vmware.2-fips-vsc0.1.14"),
@@ -227,10 +232,13 @@ func TestAsyncTrainLabelsAvoidVCenterFraming(t *testing.T) {
 	_, labels := describeSupervisor(rels, "8.0U3k", map[string]bool{"8.0U3k": true})
 	for _, l := range labels {
 		if strings.Contains(l, "vCenter") || strings.Contains(l, "ships with") {
-			t.Errorf("async label should not mention vCenter: %q", l)
+			t.Errorf("label should not mention vCenter: %q", l)
 		}
-		if !strings.Contains(l, "Supervisor async release") {
-			t.Errorf("async label should name the async train: %q", l)
+		if strings.Contains(l, "async") || strings.Contains(l, "from ") {
+			t.Errorf("label should claim no provenance: %q", l)
 		}
+	}
+	if labels[0] != "v1.32.9+vmware.2-fips-vsc0.1.15" {
+		t.Errorf("expected the bare version, got %q", labels[0])
 	}
 }

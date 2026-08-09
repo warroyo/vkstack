@@ -1,0 +1,19 @@
+# Everything the build does not need. The binary at the repo root is the big one: it is
+# a local build artifact and would otherwise be shipped into the build context.
+/vkstack
+/dist/
+*.db
+*.db-wal
+*.db-shm
+
+.git/
+.github/
+.claude/
+deploy/
+docs/
+install.sh
+*.md
+.goreleaser.yaml
+.mcp.json
+Dockerfile
+.dockerignore

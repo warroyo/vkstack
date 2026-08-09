@@ -31,13 +31,11 @@ import (
 
 // siteData is everything the page needs, in one file.
 //
-// One bundle rather than a file per answer: the whole set gzips to a fraction of the
-// mermaid bundle the page already loads, and it makes selecting a version instant
-// instead of a round trip. It also keeps versions out of file names, where upstream's
-// `+` and `.` would be at the mercy of whatever the static host does to a path.
+// One bundle rather than a file per answer: it makes selecting a version instant instead
+// of a round trip, and it keeps versions out of file names, where upstream's `+` and `.`
+// would be at the mercy of whatever the static host does to a path.
 type siteData struct {
-	Meta  json.RawMessage `json:"meta"`
-	Model json.RawMessage `json:"model"`
+	Meta json.RawMessage `json:"meta"`
 	// StackMap is the unpinned map: what the page shows before anything is selected.
 	StackMap json.RawMessage `json:"stackmap"`
 	// StackMaps is the pinned map for every clickable node, keyed product -> version.
@@ -128,9 +126,6 @@ func generate(handler http.Handler) (*siteData, error) {
 
 	var err error
 	if data.Meta, err = ask(handler, "/api/meta"); err != nil {
-		return nil, err
-	}
-	if data.Model, err = ask(handler, "/api/model"); err != nil {
 		return nil, err
 	}
 	if data.StackMap, err = ask(handler, "/api/stackmap"); err != nil {

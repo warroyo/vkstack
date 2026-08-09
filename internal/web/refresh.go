@@ -85,8 +85,8 @@ func (l *Ledger) Snapshot() map[string]any {
 }
 
 // handleHealth is the probe for a hosted instance. It reports 200 only when the cache
-// actually has data, so a rollout does not go green on an instance that can serve
-// nothing but the model view.
+// actually has data, so a rollout does not go green on an instance that has nothing to
+// answer with yet.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	g, err := s.cfg.Load()
 	if err != nil {

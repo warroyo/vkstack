@@ -186,7 +186,7 @@ vkstack serve --bind 0.0.0.0 --port 8080 --read-only --refresh-interval 6h
   refresh is logged and retried next tick rather than taking the server down, so stale
   data is still served.
 - `GET /healthz` returns 200 only once the cache actually has data, so a rollout does not
-  go green on an instance that can serve nothing but the model view.
+  go green on an instance that has nothing to answer with yet.
 
 The UI shows the mode and the refresh cadence in its header. The parsed graph is cached in
 memory and reloaded only when the cache's timestamp changes, so a refresh, whether
@@ -298,6 +298,7 @@ when it is written, so changing it never needs a refetch.
 ```
 cmd/vkstack/        entry point
 internal/model/     the conceptual dependency model; emits the mermaid diagram
+                    used by `graph` and docs/model.md
 internal/version/   two version schemes (see below)
 internal/api/       client for the JSON API behind the interop SPA
 internal/store/     SQLite cache — a dumb mirror of what upstream returned

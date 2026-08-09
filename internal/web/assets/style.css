@@ -86,22 +86,6 @@ body {
   text-transform: uppercase;
 }
 
-#tabs { display: flex; gap: 1.1rem; }
-
-#tabs button {
-  background: none;
-  border: 0;
-  padding: 0.15rem 0;
-  font: inherit;
-  font-size: 0.88rem;
-  color: var(--muted);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-}
-
-#tabs button:hover { color: var(--ink); }
-#tabs button.active { color: var(--ink); border-bottom-color: var(--signal); }
-
 .meta {
   margin: 0.6rem 0 0;
   font-size: 0.76rem;
@@ -110,7 +94,6 @@ body {
 }
 
 main { padding: 1.5rem; max-width: 1240px; }
-.view.hidden { display: none; }
 
 .lede { margin: 0; color: var(--muted); max-width: 60ch; }
 h2 { font-size: 0.9rem; margin: 1.6rem 0 0.6rem; }
@@ -378,6 +361,28 @@ button.ghost.inline { margin-left: 0.6rem; }
   .map-svg { max-width: 100%; }
 }
 
+/* The provenance of the whole page, once, at the bottom. Quieter than a footnote on any
+   one section because it qualifies all of them, and it stays on the printed page: a
+   change board reading a printout needs the caveat as much as the screen reader does. */
+.site-foot {
+  padding: 0 1.5rem 2.2rem;
+  max-width: 1240px;
+}
+
+.site-foot p {
+  margin: 0;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--hair);
+  max-width: 78ch;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+.site-foot strong { color: var(--muted); }
+.site-foot a { color: inherit; text-decoration-color: var(--hair); }
+.site-foot a:hover { color: var(--ink); text-decoration-color: currentColor; }
+
 .footnote {
   margin-top: 1.1rem;
   font-size: 0.78rem;
@@ -441,20 +446,6 @@ button.ghost.inline { margin-left: 0.6rem; }
 .peek.hidden { display: none; }
 
 /* ---- shared ------------------------------------------------------------ */
-
-.diagram {
-  background: var(--panel);
-  border: 1px solid var(--hair);
-  border-radius: var(--radius);
-  padding: 1.2rem;
-  overflow-x: auto;
-}
-
-.diagram svg { max-width: 100%; height: auto; }
-
-.prose { max-width: 78ch; padding-left: 1.1rem; color: var(--ink); }
-.prose li { margin-bottom: 0.5rem; }
-.prose .unpublished { color: var(--warn); font-style: italic; }
 
 .error {
   border-radius: var(--radius);
@@ -541,6 +532,37 @@ button.ghost.inline { margin-left: 0.6rem; }
   opacity: 0.62;
 }
 
+/* ---- tracing one connection -------------------------------------------- */
+
+/* The stroke is the hit area in SVG, and a 1.4px stroke is not something anyone can
+   point at. Every connection carries a fat invisible twin that takes the pointer. */
+.map-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: default;
+}
+
+/* While one connection is being traced, the rest of the map steps back rather than
+   disappearing: the context is still worth seeing, just not competing. */
+.map-svg.is-tracing .map-edge:not(.is-hot, .is-leaving) { opacity: 0.16; }
+.map-svg.is-tracing .map-node:not(.is-traced, .is-leaving) { opacity: 0.3; }
+
+.map-edge { transition: opacity var(--step) ease; }
+
+.map-edge.is-hot .map-link {
+  opacity: 1;
+  stroke-width: 2.6;
+}
+
+/* The two releases the connection is about, named at both ends, so a curve that crosses
+   others can still be followed to what it connects. */
+.map-node.is-traced .map-node-box {
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 3px var(--signal));
+}
+
 /* The map is reconciled rather than rebuilt, so these transitions finally have something
    to animate. Position lives on the group's transform: one animatable property instead of
    a coordinate rewrite on every child. */
@@ -554,15 +576,15 @@ button.ghost.inline { margin-left: 0.6rem; }
 .map-node.is-static { transition: opacity var(--step) ease; }
 
 .map-node.is-entering,
-.map-link.is-entering { opacity: 0; }
+.map-edge.is-entering { opacity: 0; }
 
 .map-node.is-leaving,
-.map-link.is-leaving {
+.map-edge.is-leaving {
   opacity: 0;
   pointer-events: none;
 }
 
-.map-link { transition: opacity var(--step) ease, d var(--step) ease; }
+.map-link { transition: opacity var(--step) ease, stroke-width var(--step) ease, d var(--step) ease; }
 
 /* A solve is in flight: keep the previous answer legible instead of blanking the frame,
    which reads as a broken tool on a slow connection. */
@@ -574,7 +596,7 @@ button.ghost.inline { margin-left: 0.6rem; }
 .map.is-solving { cursor: progress; }
 
 @media (prefers-reduced-motion: reduce) {
-  .map-node, .map-link, .map.is-solving .map-svg { transition: none; }
+  .map-node, .map-link, .map-edge, .map.is-solving .map-svg { transition: none; }
 }
 
 .map-node .map-node-box {

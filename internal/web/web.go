@@ -67,7 +67,6 @@ func NewServer(cfg Config) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
-	mux.HandleFunc("GET /api/model", s.handleModel)
 	mux.HandleFunc("GET /api/releases", s.handleReleases)
 	mux.HandleFunc("POST /api/stack", s.handleStack)
 	mux.HandleFunc("POST /api/check", s.handleCheck)
@@ -140,40 +139,6 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		resp["refresh"] = ledger
 	}
 	writeJSON(w, http.StatusOK, resp)
-}
-
-func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
-	covered := model.DefaultCoverage
-	if g, err := s.cfg.Load(); err == nil {
-		covered = g.Published
-	}
-
-	type edgeJSON struct {
-		From    string `json:"from"`
-		To      string `json:"to"`
-		Summary string `json:"summary"`
-		// Published is the only qualifier the screen carries. Everything else about how
-		// a claim is known lives in docs/model.md and `vkstack explain`; this view is a
-		// picture of the relationships, not a reference page.
-		Published bool `json:"published"`
-	}
-	var edges []edgeJSON
-	for _, e := range model.Edges {
-		if !model.Backbone(e) {
-			continue
-		}
-		from, _ := model.ByKey(e.From)
-		to, _ := model.ByKey(e.To)
-		edges = append(edges, edgeJSON{
-			From: from.Label, To: to.Label, Summary: e.Summary,
-			Published: covered(from.ID, to.ID),
-		})
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"mermaid": model.MermaidBackbone(covered),
-		"edges":   edges,
-	})
 }
 
 type releaseJSON struct {

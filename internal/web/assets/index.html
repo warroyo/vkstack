@@ -10,10 +10,6 @@
   <header class="masthead">
     <div class="masthead-row">
       <h1>vkstack</h1>
-      <nav id="tabs">
-        <button data-view="stack" class="active">The stack</button>
-        <button data-view="model">How it fits together</button>
-      </nav>
     </div>
     <p id="meta" class="meta"></p>
     <!-- Whether the data is still moving, not just how old it is. -->
@@ -22,11 +18,12 @@
 
   <main>
     <!-- The main event: every layer at once, bottom-up. -->
-    <section id="view-stack" class="view">
+    <section id="view-stack">
       <div class="stack-head">
         <p class="lede" id="stack-lede">
           Pick a version at any layer. Everything that can be in the same working stack
-          stays lit; everything that cannot fades back.
+          stays lit; everything that cannot fades back. Hover a connection, or a version
+          in the map, to trace what it joins.
         </p>
         <div class="stack-actions">
           <label class="toggle">
@@ -85,19 +82,22 @@
         for that pair at all and the connection is inferred from the rest of the stack.
       </p>
     </section>
-
-    <section id="view-model" class="view hidden">
-      <p class="lede">
-        How the pieces sit together, and which way the dependencies run.
-      </p>
-      <div class="diagram" id="model-diagram"></div>
-      <ul id="model-prose" class="prose"></ul>
-    </section>
   </main>
+
+  <!-- The same disclaimer the README leads with, cut to what a reader of the page
+       needs: this is not Broadcom's, and the matrix is still the authority. -->
+  <footer class="site-foot">
+    <p>
+      <strong>Unofficial.</strong> Not affiliated with or endorsed by Broadcom. The data
+      here comes from the same undocumented endpoint the interoperability matrix website
+      calls, so it can change or stop working without notice. The matrix itself is the
+      authority — verify anything you are relying on at
+      <a href="https://interopmatrix.broadcom.com" rel="noopener">interopmatrix.broadcom.com</a>.
+    </p>
+  </footer>
 
   <div id="peek" class="peek hidden" role="tooltip"></div>
 
-  <script src="vendor/mermaid.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

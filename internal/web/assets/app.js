@@ -15,7 +15,6 @@ const state = {
   baseCounts: {},     // layer key -> total node count, for the narrowing readout
   meta: null,         // the cache snapshot this page is reading, for the manifest
   filter: "",         // free-text narrowing of the version lists
-  view: "stack",      // which tab is showing
 };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -67,8 +66,6 @@ async function apiStatic(path) {
   switch (url.pathname) {
     case "/api/meta":
       return data.meta;
-    case "/api/model":
-      return data.model;
     case "/api/stackmap": {
       const product = url.searchParams.get("product");
       const version = url.searchParams.get("version");
@@ -202,6 +199,9 @@ function resetMap() {
 function renderMap() {
   const host = $("#map");
   const caption = $("#map-caption");
+  // A redraw moves the map out from under the pointer, and the mouseleave that would
+  // have ended the trace may never fire. Start every frame untraced.
+  clearTrace();
 
   if (!state.pin) {
     resetMap();
@@ -322,25 +322,82 @@ function reconcileEdges(pos) {
     else if (edge.untested) cls.push("is-untested");
     if (edge.footnote) cls.push("has-footnote");
 
-    let path = mapDOM.edges.get(key);
-    if (!path) {
-      path = svgEl("path", { class: cls.join(" ") + " is-entering" });
-      mapDOM.links.append(path);
-      mapDOM.edges.set(key, path);
-      requestAnimationFrame(() => path.classList.remove("is-entering"));
-    } else {
-      path.setAttribute("class", cls.join(" "));
+    // Two paths per connection: the hairline that is drawn, and a fat transparent one
+    // that is aimed at. A 1.4px stroke is a 1.4px hover target, which is not a target.
+    let group = mapDOM.edges.get(key);
+    if (!group) {
+      group = svgEl("g", {
+        class: "map-edge is-entering", "data-from": edge.from, "data-to": edge.to,
+      });
+      group.append(svgEl("path", { class: "map-hit" }), svgEl("path", {}));
+      mapDOM.links.append(group);
+      mapDOM.edges.set(key, group);
+      bindMapEdge(group, edge.from, edge.to);
+      requestAnimationFrame(() => group.classList.remove("is-entering"));
     }
-    path.setAttribute("d", `M ${a.cx} ${y1} C ${a.cx} ${mid}, ${b.cx} ${mid}, ${b.cx} ${y2}`);
-    path.textContent = "";
+    const [hit, line] = group.children;
+    line.setAttribute("class", cls.join(" "));
+    const d = `M ${a.cx} ${y1} C ${a.cx} ${mid}, ${b.cx} ${mid}, ${b.cx} ${y2}`;
+    hit.setAttribute("d", d);
+    line.setAttribute("d", d);
+    group.querySelector("title")?.remove();
     const why = edgeProvenance(edge);
-    if (why) path.append(svgEl("title", {}, why));
+    if (why) group.append(svgEl("title", {}, why));
   }
-  for (const [key, path] of mapDOM.edges) {
+  for (const [key, group] of mapDOM.edges) {
     if (seen.has(key)) continue;
     mapDOM.edges.delete(key);
-    fadeOut(path);
+    fadeOut(group);
   }
+}
+
+// --- tracing a connection ----------------------------------------------------
+//
+// A lit map can carry dozens of connectors, and where two layers are both wide the curves
+// cross often enough that following one by eye is guesswork. Hovering resolves it: the
+// connection under the pointer, and the two releases it is actually about, stay at full
+// strength while everything else recedes. Hovering a node does the same for every
+// connection that touches it, which is the question people actually arrive with — what
+// does this version reach.
+
+function bindMapEdge(group, from, to) {
+  group.onmouseenter = () => traceEdges([`${from}|${to}`], [from, to]);
+  group.onmouseleave = () => clearTrace();
+}
+
+// traceEdges lights the named connections and their endpoints, and dims the rest.
+function traceEdges(keys, nodeIDs) {
+  if (!mapDOM.svg || !keys.length) return;
+  const hot = new Set(keys);
+  for (const [key, group] of mapDOM.edges) {
+    group.classList.toggle("is-hot", hot.has(key));
+  }
+  const lit = new Set(nodeIDs);
+  for (const [id, g] of mapDOM.nodes) {
+    g.classList.toggle("is-traced", lit.has(id));
+  }
+  mapDOM.svg.classList.add("is-tracing");
+}
+
+// traceNode lights every connection that touches a node, in both directions.
+function traceNode(id) {
+  const keys = [];
+  const nodes = new Set([id]);
+  for (const [key, group] of mapDOM.edges) {
+    const { from, to } = group.dataset;
+    if (from !== id && to !== id) continue;
+    keys.push(key);
+    nodes.add(from);
+    nodes.add(to);
+  }
+  traceEdges(keys, [...nodes]);
+}
+
+function clearTrace() {
+  if (!mapDOM.svg) return;
+  mapDOM.svg.classList.remove("is-tracing");
+  for (const group of mapDOM.edges.values()) group.classList.remove("is-hot");
+  for (const g of mapDOM.nodes.values()) g.classList.remove("is-traced");
 }
 
 // MOVE_EPSILON is the distance below which a node is not really moving.
@@ -417,10 +474,10 @@ function bindMapNode(g, layer, node) {
       else togglePin(layer.key, node);
     }
   };
-  g.onmouseenter = () => showPeek(g, layer, node);
-  g.onfocus = () => showPeek(g, layer, node);
-  g.onmouseleave = () => hidePeek();
-  g.onblur = () => hidePeek();
+  g.onmouseenter = () => { showPeek(g, layer, node); traceNode(node.id); };
+  g.onfocus = () => { showPeek(g, layer, node); traceNode(node.id); };
+  g.onmouseleave = () => { hidePeek(); clearTrace(); };
+  g.onblur = () => { hidePeek(); clearTrace(); };
 }
 
 function updateMapNode(g, layer, node, p) {
@@ -669,7 +726,7 @@ function setPin(pin, { push = true } = {}) {
 // The keys are the ones the API already speaks (product, version), so the address bar and
 // /api/stackmap read the same. Defaults are omitted: a bare URL means the default view.
 
-const URL_DEFAULTS = { legacy: true, view: "stack" };
+const URL_DEFAULTS = { legacy: true };
 
 function currentURL() {
   const params = new URLSearchParams();
@@ -678,14 +735,13 @@ function currentURL() {
     params.set("version", state.pin.version);
   }
   if (state.hideLegacy !== URL_DEFAULTS.legacy) params.set("legacy", "1");
-  if (state.view !== URL_DEFAULTS.view) params.set("view", state.view);
   const query = params.toString();
   return location.pathname + (query ? "?" + query : "");
 }
 
 // syncURL writes the current selection into the address bar. Pin changes push a history
 // entry so back walks the exploration; view-only changes replace, so the filter checkbox
-// and the tabs do not fill the back button with noise.
+// does not fill the back button with noise.
 let restoring = false;
 function syncURL(push) {
   if (restoring) return;
@@ -696,7 +752,7 @@ function syncURL(push) {
 }
 
 function readState() {
-  return { pin: state.pin, hideLegacy: state.hideLegacy, view: state.view };
+  return { pin: state.pin, hideLegacy: state.hideLegacy };
 }
 
 // applyURL seeds the app from the address bar. Returns whether the URL asked for
@@ -706,16 +762,14 @@ function applyURL() {
   const product = params.get("product");
   const version = params.get("version");
   state.hideLegacy = params.get("legacy") !== "1";
-  state.view = params.get("view") === "model" ? "model" : "stack";
   state.pin = product && version ? { product, version } : null;
   $("#hide-legacy").checked = state.hideLegacy;
-  return params.has("product") || params.has("legacy") || params.has("view");
+  return params.has("product") || params.has("legacy");
 }
 
 window.addEventListener("popstate", () => {
   restoring = true;
   applyURL();
-  showView(state.view);
   loadStack().finally(() => { restoring = false; });
 });
 
@@ -1143,56 +1197,7 @@ function hidePeek(force = false) {
   peek.classList.remove("is-locked");
 }
 
-// --- the conceptual model --------------------------------------------------
-
-const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-mermaid.initialize({
-  startOnLoad: false,
-  securityLevel: "strict",
-  theme: prefersDark ? "dark" : "default",
-  flowchart: { curve: "basis", nodeSpacing: 45, rankSpacing: 55, htmlLabels: true },
-});
-
-let modelLoaded = false;
-async function loadModel() {
-  if (modelLoaded) return;
-  const data = await api("/api/model");
-  try {
-    const { svg } = await mermaid.render("model", data.mermaid);
-    $("#model-diagram").innerHTML = svg;
-  } catch (err) {
-    $("#model-diagram").append(el("div", { class: "error" },
-      `could not render diagram: ${err.message}`));
-  }
-
-  const list = $("#model-prose");
-  list.textContent = "";
-  for (const e of data.edges) {
-    list.append(el("li", {},
-      el("strong", {}, `${e.from} → ${e.to}`),
-      ` — ${e.summary}`,
-      e.published ? null : el("span", { class: "unpublished" }, " (inferred)")));
-  }
-
-  modelLoaded = true;
-}
-
-// --- tabs and boot ---------------------------------------------------------
-
-function showView(name) {
-  state.view = name;
-  for (const v of ["stack", "model"]) {
-    $(`#view-${v}`).classList.toggle("hidden", v !== name);
-  }
-  for (const btn of document.querySelectorAll("#tabs button")) {
-    btn.classList.toggle("active", btn.dataset.view === name);
-  }
-  // The tab is a personal habit rather than part of the view being pointed at, so it is
-  // remembered locally as well as travelling in a link that names it explicitly.
-  localStorage.setItem("vkstack.view", name);
-  syncURL(false);
-  if (name === "model") loadModel();
-}
+// --- boot -------------------------------------------------------------------
 
 // MY_STACK holds what this browser actually runs, if its owner said so. It is a personal
 // default, not part of any link: it decides where a bare visit lands, and a URL naming a
@@ -1240,14 +1245,10 @@ async function boot() {
       await loadStack();
     }
   }
-  showView(fromURL ? state.view : (localStorage.getItem("vkstack.view") || "stack"));
   // Make a bare visit shareable retroactively, without adding a phantom history entry.
   syncURL(false);
 }
 
-for (const btn of document.querySelectorAll("#tabs button")) {
-  btn.addEventListener("click", () => showView(btn.dataset.view));
-}
 $("#clear-pin").addEventListener("click", () => setPin(null));
 $("#copy-link").addEventListener("click", copyLink);
 $("#save-stack").addEventListener("click", () => {

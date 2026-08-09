@@ -63,10 +63,14 @@ release:
     ## Install
 
     ```sh
-    go install github.com/warroyo/vkstack/cmd/vkstack@{{ .Tag }}
+    curl -fsSL https://raw.githubusercontent.com/warroyo/vkstack/main/install.sh | sh
     ```
 
-    Or download the archive for your platform above, then:
+    Pin this release with `VKSTACK_VERSION={{ .Tag }}`, or download the archive for your
+    platform above. With a Go toolchain:
+    `go install github.com/warroyo/vkstack/cmd/vkstack@{{ .Tag }}`.
+
+    Then:
 
     ```sh
     vkstack refresh          # populate the local cache once (~1 min)

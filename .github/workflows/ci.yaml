@@ -32,6 +32,15 @@ jobs:
       - name: vet
         run: go vet ./...
 
+      # The installer is the front door, and it gets piped straight into /bin/sh — which
+      # is dash here, so a bashism that works in an interactive test would break every
+      # new user. Parse it with dash and lint it.
+      - name: check install.sh
+        run: |
+          sudo apt-get install -y --no-install-recommends dash shellcheck >/dev/null
+          dash -n install.sh
+          shellcheck install.sh
+
       - name: test
         run: go test ./...
 

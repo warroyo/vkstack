@@ -28,17 +28,42 @@ For agents there is also `vkstack describe`, which states the whole surface as J
 ## Quick start
 
 ```sh
-go install github.com/warroyo/vkstack/cmd/vkstack@latest   # or build: go build ./cmd/vkstack
+curl -fsSL https://raw.githubusercontent.com/warroyo/vkstack/main/install.sh | sh
+```
 
+One static binary, no toolchain and no runtime dependencies. It lands in
+`/usr/local/bin` if you own that, otherwise `~/.local/bin`, and every download is verified
+against the release's own `checksums.txt` before anything is put on your PATH.
+
+```sh
 vkstack refresh                    # pull the matrix into a local cache (~1 min)
 vkstack serve --open               # the map, for a person
 vkstack stack vcenter 8.0U3k       # the whole valid stack, as JSON
 vkstack stack vcenter 8.0U3k --human
 ```
 
-Prebuilt binaries for each platform are on the
-[releases page](https://github.com/warroyo/vkstack/releases). For wiring it into an agent —
-`claude mcp add vkstack -- vkstack mcp` — see [AGENTS.md](AGENTS.md).
+Pin a version or pick the destination:
+
+```sh
+VKSTACK_VERSION=v0.1.0 VKSTACK_INSTALL_DIR=~/bin \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/warroyo/vkstack/main/install.sh)"
+```
+
+Piping a script from the internet into a shell is a decision, not a default — the script
+is short and does nothing clever, so read it first if you would rather:
+
+```sh
+curl -fsSL -O https://raw.githubusercontent.com/warroyo/vkstack/main/install.sh
+less install.sh && sh install.sh
+```
+
+Other ways in: grab an archive from the
+[releases page](https://github.com/warroyo/vkstack/releases) (Linux, macOS and Windows,
+amd64 and arm64), `go install github.com/warroyo/vkstack/cmd/vkstack@latest` if you have Go,
+or `go build ./cmd/vkstack` from a clone.
+
+For wiring it into an agent — `claude mcp add vkstack -- vkstack mcp` — see
+[AGENTS.md](AGENTS.md).
 
 ## Commands
 

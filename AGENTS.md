@@ -84,11 +84,16 @@ Branch on `code`. `hint` names the next thing to try, so recovery does not need 
 ## Install
 
 ```sh
-go install github.com/warroyo/vkstack/cmd/vkstack@latest
+curl -fsSL https://raw.githubusercontent.com/warroyo/vkstack/main/install.sh | sh
 ```
 
-Or grab a binary from the [releases page](https://github.com/warroyo/vkstack/releases) and
-put it on your `PATH`. No cgo, no runtime dependencies, one file.
+One static binary, no toolchain required. It goes to `/usr/local/bin` when writable and
+`~/.local/bin` otherwise; set `VKSTACK_INSTALL_DIR` to choose, `VKSTACK_VERSION` to pin.
+Each download is checked against the release's `checksums.txt` before install.
+
+If a Go toolchain is present, `go install github.com/warroyo/vkstack/cmd/vkstack@latest`
+works too, as does downloading an archive from the
+[releases page](https://github.com/warroyo/vkstack/releases).
 
 Then populate the cache once — **this step is not optional**, and skipping it is the most
 likely reason a fresh install appears broken:

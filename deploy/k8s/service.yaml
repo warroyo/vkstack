@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vkstack
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: vkstack
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

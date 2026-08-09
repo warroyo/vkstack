@@ -194,6 +194,57 @@ without a restart.
 
 There is no authentication. The data is public, but bind accordingly.
 
+### In a container
+
+Images are published to `ghcr.io/warroyo/vkstack` for `linux/amd64` and `linux/arm64`.
+Tags: a version (`v0.1.0`, `0.1`), `latest` for the newest release, `edge` for `main`.
+
+```sh
+docker run --rm -p 8080:8080 ghcr.io/warroyo/vkstack:latest
+```
+
+The default command is the hosted one above, so that starts read-only, refreshes every
+six hours, and fetches the matrix immediately because the cache is cold. The CLI is in
+the same image, so any other subcommand works too:
+
+```sh
+docker run --rm ghcr.io/warroyo/vkstack:latest stack vcenter 8.0U3k
+```
+
+The cache lives at `/var/cache/vkstack`. Mount a volume there to keep it across
+restarts; without one, each start refetches, which takes about a minute. The image is
+distroless and runs as uid 65532 with no shell in it.
+
+### On Kubernetes
+
+`deploy/k8s` is a Deployment and a ClusterIP Service, and nothing else:
+
+```sh
+kubectl apply -k deploy/k8s
+kubectl port-forward svc/vkstack 8080:80
+```
+
+It runs read-only with a six-hour refresh, caches to an `emptyDir`, and gates readiness
+on `/healthz`, so a pod does not take traffic until it has data. Liveness is deliberately
+a different probe: an upstream outage should not restart a process that is serving
+perfectly good cached data.
+
+One replica is intentional. Each pod holds its own SQLite cache and refreshes on its own,
+so replicas mean several callers upstream and several slightly different pictures.
+
+To pin a version, or to build your own layer on top:
+
+```sh
+cd deploy/k8s && kustomize edit set image ghcr.io/warroyo/vkstack:v0.1.0
+```
+
+```yaml
+resources:
+  - github.com/warroyo/vkstack/deploy/k8s?ref=v0.1.0
+```
+
+There is still no authentication, so put an Ingress in front of it accordingly.
+
 ## Two things worth knowing
 
 Three of the ten product pairs have no upstream data. ESX × VKS, ESX × VKr and

@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vkstack
+spec:
+  # One replica on purpose. The cache is a SQLite file local to the pod, so every replica
+  # refreshes from upstream on its own: two replicas mean two callers and two slightly
+  # different pictures. Scale out only behind a shared, read-only cache.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vkstack
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vkstack
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vkstack
+          image: ghcr.io/warroyo/vkstack:latest
+          args:
+            - serve
+            - --bind=0.0.0.0
+            - --port=8080
+            # Clients cannot make this instance call upstream; the scheduled refresh
+            # below is the only thing that does.
+            - --read-only
+            - --refresh-interval=6h
+          ports:
+            - name: http
+              containerPort: 8080
+          # /healthz is 200 only once the cache holds data, so a rollout does not go green
+          # on a pod that can serve nothing but the model view. A cold start fetches the
+          # whole matrix first, which takes about a minute — hence the generous budget.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 40
+          # Liveness deliberately does not use /healthz: an upstream outage would leave a
+          # perfectly healthy process failing its probe and getting killed in a loop.
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cache
+              mountPath: /var/cache/vkstack
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # emptyDir, not a PVC: the cache is a disposable mirror of a public matrix, and a
+        # cold pod rebuilds it in about a minute. Swap in a PVC if you would rather a
+        # restart not call upstream.
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

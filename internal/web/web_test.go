@@ -243,8 +243,12 @@ func TestStackEndpointSolvesAndReportsInferred(t *testing.T) {
 			t.Errorf("recommended stack is missing %s", key)
 		}
 	}
-	if len(body["inferred"].([]any)) != 3 {
-		t.Errorf("expected 3 inferred pairs, got %v", body["inferred"])
+	// Nothing needs inferring: every gap in the matrix falls on a pair that is not a
+	// dependency, so none of them are consulted to validate a stack.
+	if inferred, present := body["inferred"]; present && inferred != nil {
+		if got := inferred.([]any); len(got) != 0 {
+			t.Errorf("expected nothing inferred, got %v", got)
+		}
 	}
 	// Options drive the narrowing dropdowns; without them the UI cannot constrain.
 	if _, ok := body["options"].(map[string]any); !ok {
@@ -262,8 +266,11 @@ func TestCheckEndpointSeparatesUnverifiedFromIncompatible(t *testing.T) {
 	for _, v := range body["verdicts"].([]any) {
 		states[v.(map[string]any)["state"].(string)]++
 	}
+	// The three unpublished pairs are still reported per pair — they are just not
+	// dependencies, so they never fail the check.
 	if states["unverified"] != 3 {
-		t.Errorf("expected 3 unverified pairs, got %d (%v)", states["unverified"], states)
+		t.Errorf("expected the 3 unpublished pairs still reported, got %d (%v)",
+			states["unverified"], states)
 	}
 	if states["bad"] != 0 {
 		t.Errorf("expected no incompatible pairs, got %d", states["bad"])

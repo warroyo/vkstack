@@ -19,12 +19,16 @@ type Stack struct {
 	Verdicts []PairVerdict
 }
 
-// Inferred returns the pairs in this stack that upstream does not publish. The stack is
-// still valid on every published pair; these are the ones taken on trust.
+// Inferred returns dependency pairs in this stack that upstream does not publish — the
+// ones taken on trust.
+//
+// With the constraint set limited to real dependencies this is normally empty: all three
+// gaps in the matrix (ESX against VKS and VKr, Supervisor against VKr) fall on pairs that
+// are not dependencies, so nothing has to be inferred to validate a stack.
 func (s Stack) Inferred() []PairVerdict {
 	var out []PairVerdict
 	for _, v := range s.Verdicts {
-		if v.Unverified() {
+		if v.Dependency && v.Unverified() {
 			out = append(out, v)
 		}
 	}
@@ -117,13 +121,11 @@ func (g *Graph) Stacks(pins map[int]*Release, opts StackOptions) ([]Stack, *Stac
 	return nil, failure
 }
 
-// firstBadPin reports the first pinned pair that is published and not compatible.
-// Unverified pairs pass: three of the ten have no upstream data by design.
+// firstBadPin reports the first pinned dependency pair that is published and not
+// compatible. Unverified pairs pass, and non-dependency pairs are not enforced.
 func (g *Graph) firstBadPin(pins map[int]*Release) (PairVerdict, bool) {
-	for _, v := range g.Check(pins).Pairs {
-		if !v.Unverified() && !Compatible(v.Status) {
-			return v, false
-		}
+	if bad := g.Check(pins).Incompatible(); len(bad) > 0 {
+		return bad[0], false
 	}
 	return PairVerdict{}, true
 }
@@ -153,8 +155,10 @@ func (g *Graph) consistent(r *Release, assigned map[int]*Release) bool {
 		if otherID == r.ProductID {
 			continue
 		}
-		if !g.Published(r.ProductID, otherID) {
-			continue // nothing to check against; reported later as inferred
+		// Only real dependencies constrain a stack. vCenter against VKS is published
+		// but is not a dependency, and enforcing it rules out combinations that work.
+		if !model.IsDependency(r.ProductID, otherID) || !g.Published(r.ProductID, otherID) {
+			continue
 		}
 		status, ok := g.Status(r.ID, other.ID)
 		if !ok || !Compatible(status) {
@@ -169,7 +173,7 @@ func (g *Graph) consistent(r *Release, assigned map[int]*Release) bool {
 // everything.
 func (g *Graph) blockingProduct(productID int, assigned map[int]*Release) model.Product {
 	for otherID, other := range assigned {
-		if !g.Published(productID, otherID) {
+		if !model.IsDependency(productID, otherID) || !g.Published(productID, otherID) {
 			continue
 		}
 		anyOK := false

@@ -163,8 +163,10 @@ func TestCheckThreeBuckets(t *testing.T) {
 	if !res.OK() {
 		t.Errorf("expected a consistent stack to pass, incompatible: %v", res.Incompatible())
 	}
-	if got := len(res.Unverified()); got != 3 {
-		t.Errorf("expected exactly 3 unverified pairs, got %d", got)
+	// Every gap in the matrix falls on a pair that is not a dependency, so validating a
+	// stack needs nothing inferred.
+	if got := len(res.Unverified()); got != 0 {
+		t.Errorf("expected no unverified dependency pairs, got %d", got)
 	}
 
 	// Mixing generations must fail on published pairs.
@@ -186,8 +188,10 @@ func TestUnverifiedDoesNotFailCheck(t *testing.T) {
 	if !res.OK() {
 		t.Error("an unpublished pair must not fail the check")
 	}
-	if len(res.Unverified()) != 1 {
-		t.Errorf("expected 1 unverified pair, got %d", len(res.Unverified()))
+	// ESX against VKr is unpublished *and* not a dependency, so it is neither enforced
+	// nor reported as something that had to be inferred.
+	if len(res.Unverified()) != 0 {
+		t.Errorf("expected no unverified dependency pairs, got %d", len(res.Unverified()))
 	}
 }
 
@@ -211,8 +215,8 @@ func TestStacksSolvesFromOnePin(t *testing.T) {
 		if !g.Check(s.Releases).OK() {
 			t.Errorf("stack %d does not pass Check: %+v", i, g.Check(s.Releases).Incompatible())
 		}
-		if len(s.Inferred()) != 3 {
-			t.Errorf("stack %d: expected 3 inferred pairs, got %d", i, len(s.Inferred()))
+		if got := len(s.Inferred()); got != 0 {
+			t.Errorf("stack %d: nothing should need inferring, got %d", i, got)
 		}
 	}
 }
@@ -278,5 +282,58 @@ func TestResolve(t *testing.T) {
 	// A prefix matching two releases must report ambiguity rather than guessing.
 	if _, err := g.Resolve("esx", "8.0"); err == nil {
 		t.Log("note: 8.0 resolved uniquely because the floor removed 8.0U2")
+	}
+}
+
+// Only real dependencies may invalidate a stack. The matrix publishes vCenter against
+// VKS, but VKS runs on the Supervisor — so a mismatch on that pair says nothing about
+// whether the stack works, and must not rule the VKS version out.
+func TestNonDependencyPairsAreNotEnforced(t *testing.T) {
+	snap := fixture()
+	// A newer VKS that the Supervisor supports, explicitly NOT supported against the
+	// new-generation vCenter. Kept reachable through the old vCenter so the version
+	// floor does not simply drop it.
+	snap.Releases = append(snap.Releases, store.Release{
+		ID: 43, ProductID: vks, HybridVersion: "3.8.0+v1.37", ReleaseType: "Minor", GADate: 1,
+	})
+	snap.Compat = append(snap.Compat,
+		store.Compat{ARelease: 21, BRelease: 43, Status: store.StatusNotSupported},
+		store.Compat{ARelease: 22, BRelease: 43, Status: store.StatusCompatible},
+		store.Compat{ARelease: 31, BRelease: 43, Status: store.StatusCompatible},
+		store.Compat{ARelease: 43, BRelease: 51, Status: store.StatusCompatible},
+	)
+
+	g, err := Load(snap, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if g.Releases[43] == nil {
+		t.Fatal("fixture VKS 43 was pruned; the test cannot say anything")
+	}
+
+	pins := map[int]*Release{vc: g.Releases[21]}
+	stacks, failure := g.Stacks(pins, StackOptions{Limit: 1})
+	if len(stacks) == 0 {
+		t.Fatalf("expected a stack, got %+v", failure)
+	}
+	// VKS 43 is the newest the Supervisor supports. The vCenter pair says "not
+	// supported", but that pair is not a dependency, so it must not exclude it.
+	if got := stacks[0].Releases[vks].ID; got != 43 {
+		t.Errorf("chose VKS %d; the non-dependency vCenter pair should not have excluded 43", got)
+	}
+
+	// Still reported, never enforced.
+	res := g.Check(stacks[0].Releases)
+	if !res.OK() {
+		t.Errorf("stack must pass; failing pairs are not dependencies: %+v", res.Incompatible())
+	}
+	var sawIt bool
+	for _, v := range res.Informational() {
+		if v.A.Key == "vcenter" && v.B.Key == "vks" && !Compatible(v.Status) {
+			sawIt = true
+		}
+	}
+	if !sawIt {
+		t.Error("expected the non-dependency mismatch reported as informational")
 	}
 }

@@ -121,8 +121,15 @@ type Edge struct {
 	// Bidirectional marks a mutual version-pairing constraint rather than a
 	// "this one determines that one" direction.
 	Bidirectional bool
-	// Primary marks the edges that form the backbone of the explanation. Non-primary
-	// edges exist in the data but are shortcuts rather than the conceptual spine.
+	// Primary marks a real dependency: one component actually runs on, is delivered by,
+	// or is provisioned by the other.
+	//
+	// This is also the constraint set. The matrix publishes pairs that are not
+	// dependencies — vCenter against VKS and against VKr — and those must not be
+	// enforced when validating a stack: VKS does not run on vCenter, it runs on the
+	// Supervisor, so Supervisor is what decides whether a VKS version is usable.
+	// Enforcing the non-dependency pairs produces combinations that are listed
+	// compatible yet cannot exist.
 	Primary bool
 	// Evidence says how this relationship is known.
 	Evidence Evidence
@@ -177,17 +184,20 @@ var Edges = []Edge{
 	},
 	{
 		From: "vcenter", To: "vks", Label: "published directly",
-		Summary: "Checked directly against vCenter.",
+		Summary: "Published, but not a dependency — VKS runs on the Supervisor.",
 		Prose: "vCenter is the hub of the published matrix and has a direct compatibility " +
 			"edge to VKS, which is what makes it possible to solve a whole stack from a " +
-			"single pinned vCenter version.",
+			"single pinned vCenter version. It is not a dependency, though: VKS runs on " +
+			"the Supervisor, so enforcing this pair would rule out combinations that " +
+			"work. It is looked up, never used to include or exclude.",
 		Evidence: EvidencePublished,
 	},
 	{
 		From: "vcenter", To: "vkr", Label: "published directly",
-		Summary: "Checked directly against vCenter.",
+		Summary: "Published, but not a dependency — VKr comes from VKS.",
 		Prose: "vCenter also has a direct published edge to VKr, giving a second " +
-			"independent constraint on the guest cluster version.",
+			"independent reference point. Like the VKS pair it is not a dependency — VKr " +
+			"is provisioned by VKS — so it informs rather than constrains.",
 		Evidence: EvidencePublished,
 	},
 	{
@@ -198,6 +208,26 @@ var Edges = []Edge{
 			"as inferred rather than verified.",
 		Evidence: EvidenceInferred,
 	},
+}
+
+// IsDependency reports whether two products have a real dependency between them, and so
+// whether their compatibility should constrain a stack.
+//
+// Pairs the matrix publishes that are not dependencies (vCenter against VKS or VKr) are
+// informational: useful to look up, wrong to enforce.
+func IsDependency(aProductID, bProductID int) bool {
+	for _, e := range Edges {
+		if !e.Primary {
+			continue
+		}
+		from, _ := ByKey(e.From)
+		to, _ := ByKey(e.To)
+		if (from.ID == aProductID && to.ID == bProductID) ||
+			(from.ID == bProductID && to.ID == aProductID) {
+			return true
+		}
+	}
+	return false
 }
 
 // ByKey returns the product with the given short key.

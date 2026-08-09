@@ -45,13 +45,22 @@ the base, branching up through Supervisor, VKS and VKr. Pick any version at any 
 the map redraws around it, with a list underneath showing every version in every layer,
 lit or faded.
 
-**The matrix is the source of truth.** If it lists two versions as compatible, the map
-shows that — always. A node is lit whenever the matrix lists it against your selection.
+**Only real dependencies constrain a stack.** The chain is:
 
-Connectors answer a stronger question: can you build a whole stack around both? Some
-pairs are listed compatible with nothing to bridge them — vCenter 9.0.0.0 and VKS 3.7 are
-listed together, but no Supervisor works with both. Those nodes stay lit and are marked
-"no full stack" with no connector, rather than being hidden.
+```
+VKr  →  VKS  →  Supervisor  →  vCenter  ↔  ESX
+```
+
+The matrix also publishes vCenter against VKS and vCenter against VKr. Those are worth
+looking up, but they are not dependencies — VKS runs on the Supervisor, and VKr is
+provisioned by VKS — so they are reported and never enforced. Enforcing them produces
+combinations that are listed compatible yet cannot exist: vCenter 9.0.0.0 and VKS 3.7 are
+listed together, but vCenter 9.0.0.0 tops out at Supervisor 1.30 while VKS 3.7 needs
+1.32, so there is no Supervisor to put in the middle.
+
+A node is lit when a complete valid stack exists containing it and your selection,
+enforcing the chain above. `interop check` reports the non-dependency pairs separately,
+under "not part of the verdict".
 
 Three things are grouped deliberately:
 

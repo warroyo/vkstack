@@ -489,18 +489,6 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 .unknown p:last-child { margin-bottom: 0; }
 .unknown strong { color: var(--ink); }
 
-/* Compatible per the matrix, but no intermediate version bridges it into a whole stack.
-   Shown, never hidden — the matrix is the source of truth — but visibly qualified. */
-.node.nostack {
-  border-style: dashed;
-  border-color: var(--warn);
-}
-
-.map-node.is-nostack .map-node-box {
-  stroke: var(--warn);
-  stroke-dasharray: 4 3;
-  fill: var(--panel);
-}
 
 /* ---- support lifecycle ------------------------------------------------- */
 
@@ -578,4 +566,3 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 .sw-general { background: var(--signal-soft); border-color: var(--signal); }
 .sw-tg { background: var(--tg-soft); border-color: var(--tg); }
 .sw-eos { background: var(--eos-soft); border-color: var(--eos); }
-.sw-nostack { background: var(--panel); border-color: var(--warn); border-style: dashed; }

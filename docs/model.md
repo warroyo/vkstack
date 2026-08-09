@@ -34,8 +34,8 @@ flowchart TD
 - **ESX → Supervisor** *(published in the matrix)* — The Supervisor control plane and its workloads run on the ESX hosts in the cluster, so the host version gates which Supervisor versions can be enabled.
 - **Supervisor → VKS** *(published in the matrix)* — VKS runs on top of the Supervisor and is what turns it into a service that can provision guest Kubernetes clusters.
 - **VKS → VKr** *(published in the matrix)* — VKS provisions guest clusters at a specific Kubernetes release; the VKS version declares the Kubernetes minor it serves (the "+v1.36" tail), which is what bounds the usable VKr versions.
-- **vCenter → VKS** *(published in the matrix)* — vCenter is the hub of the published matrix and has a direct compatibility edge to VKS, which is what makes it possible to solve a whole stack from a single pinned vCenter version.
-- **vCenter → VKr** *(published in the matrix)* — vCenter also has a direct published edge to VKr, giving a second independent constraint on the guest cluster version.
+- **vCenter → VKS** *(published in the matrix)* — vCenter is the hub of the published matrix and has a direct compatibility edge to VKS, which is what makes it possible to solve a whole stack from a single pinned vCenter version. It is not a dependency, though: VKS runs on the Supervisor, so enforcing this pair would rule out combinations that work. It is looked up, never used to include or exclude.
+- **vCenter → VKr** *(published in the matrix)* — vCenter also has a direct published edge to VKr, giving a second independent reference point. Like the VKS pair it is not a dependency — VKr is provisioned by VKS — so it informs rather than constrains.
 - **Supervisor → VKr** *(inferred — upstream publishes nothing for this pair)* — There is no published Supervisor-to-VKr data upstream. The relationship is real but has to be inferred through VKS and vCenter, so this tool reports it as inferred rather than verified.
 
 ## Reading the versions

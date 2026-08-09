@@ -285,10 +285,26 @@ have no data by design.`,
 			tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "PAIR\tVERDICT")
 			for _, v := range res.Pairs {
+				if !v.Dependency {
+					continue
+				}
 				fmt.Fprintf(tw, "%s %s × %s %s\t%s\n",
 					v.A.Label, v.ARelease.Raw, v.B.Label, v.BRelease.Raw, verdictWord(v))
 			}
 			tw.Flush()
+
+			// Pairs the matrix publishes that are not dependencies are shown apart, so
+			// they cannot be read as part of the verdict. VKS runs on the Supervisor,
+			// not on vCenter, so a vCenter-VKS mismatch decides nothing.
+			if info := res.Informational(); len(info) > 0 {
+				fmt.Fprintln(out, "\nAlso published, but not a dependency (not part of the verdict):")
+				tw = tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+				for _, v := range info {
+					fmt.Fprintf(tw, "  %s %s × %s %s\t%s\n",
+						v.A.Label, v.ARelease.Raw, v.B.Label, v.BRelease.Raw, statusWord(v.Status))
+				}
+				tw.Flush()
+			}
 
 			if bad := res.Incompatible(); len(bad) > 0 {
 				fmt.Fprintf(out, "\n%d pair(s) incompatible.\n", len(bad))

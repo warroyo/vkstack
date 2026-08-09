@@ -179,44 +179,23 @@ func TestSupervisorMultipleK8sPatchesUnderOneMinor(t *testing.T) {
 	}
 }
 
-// The matrix is the source of truth. If it lists two versions as compatible, the map
-// must show that — even when no intermediate version bridges them into a whole stack.
-// Hiding such a node would contradict the matrix; it is lit and flagged instead.
-func TestMatrixCompatibilityIsNeverHidden(t *testing.T) {
-	h := testServer(t)
-	body := get(t, h, "/api/stackmap?product=vcenter&version=9.0.0.0")
+// Only real dependencies constrain a stack. VKr 1.20 in the fixture is listed against
+// the vCenter but no VKS reaches it — and VKS is what actually provisions VKr — so no
+// valid stack contains it and it must not be lit.
+//
+// The direct vCenter-to-VKr listing is informational: worth looking up, wrong to treat
+// as permission to run the combination.
+func TestNonDependencyPairsDoNotAdmitAStack(t *testing.T) {
+	body := get(t, testServer(t), "/api/stackmap?product=vcenter&version=9.0.0.0")
 
 	lit := map[string]bool{}
 	for _, v := range body["lit"].([]any) {
 		lit[v.(string)] = true
 	}
-	incomplete := map[string]bool{}
-	for _, v := range body["incomplete"].([]any) {
-		incomplete[v.(string)] = true
+	if lit["vkr:1.20"] {
+		t.Error("a VKr with no VKS to provision it must not be lit, however the vCenter pair reads")
 	}
-
-	// VKr 1.20 is listed against this vCenter but no VKS reaches it, so no whole stack
-	// can contain it. It must still be lit — hiding it would contradict the matrix.
-	if !lit["vkr:1.20"] {
-		t.Error("a version the matrix lists as compatible must be lit even with no whole stack")
-	}
-	if !incomplete["vkr:1.20"] {
-		t.Error("expected it flagged as unable to complete a stack")
-	}
-
-	// A version that does complete a stack must not carry that flag.
 	if !lit["vkr:1.36"] {
-		t.Fatal("expected the stackable VKr to be lit")
-	}
-	if incomplete["vkr:1.36"] {
-		t.Error("a version that completes a stack must not be flagged")
-	}
-
-	// Connectors show buildable paths, so the unstackable node has none.
-	for _, raw := range body["edges"].([]any) {
-		e := raw.(map[string]any)
-		if e["to"] == "vkr:1.20" || e["from"] == "vkr:1.20" {
-			t.Errorf("unstackable node should have no connector, got %v", e)
-		}
+		t.Error("expected the VKr that a VKS does reach to be lit")
 	}
 }

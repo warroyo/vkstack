@@ -1175,10 +1175,26 @@ function showPeek(anchor, layer, node) {
   peek.classList.remove("hidden");
   const box = anchor.getBoundingClientRect();
   const size = peek.getBoundingClientRect();
-  // Prefer above the node; flip below when there is no room.
-  const top = box.top - size.height - 8;
-  peek.style.top = `${top < 8 ? box.bottom + 8 : top}px`;
+  peek.style.top = `${peekTop(anchor, box, size)}px`;
   peek.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - size.width - 8))}px`;
+}
+
+// peekTop keeps the popover off the thing it is describing.
+//
+// Over the map, hovering now traces a connection, and a popover floating above the node
+// lands squarely on the layers above it — hiding the lines it was opened to explain. So a
+// map node parks its popover clear of the whole frame, below it by preference and above
+// only when the viewport leaves no room. A node in the version lists has no drawing to
+// protect and keeps the tighter placement: above, flipping below when it would clip.
+function peekTop(anchor, box, size) {
+  const frame = anchor.ownerSVGElement && $(".map-frame")?.getBoundingClientRect();
+  if (frame) {
+    const below = frame.bottom + 8;
+    if (below + size.height <= window.innerHeight - 8) return below;
+    return Math.max(8, frame.top - size.height - 8);
+  }
+  const above = box.top - size.height - 8;
+  return above < 8 ? box.bottom + 8 : above;
 }
 
 // togglePeekLock is bound to a modified click on a node: keep this popover open, with its

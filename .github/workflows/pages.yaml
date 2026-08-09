@@ -1,0 +1,65 @@
+# The hosted sample at vkstack.warroyo.com.
+#
+# A static build is a snapshot, so publishing is the only thing that makes it current:
+# there is no server behind it to refresh itself. Two things can date it — the UI and the
+# upstream data — so both trigger a rebuild.
+name: pages
+
+on:
+  # The UI changed.
+  push:
+    branches: [main]
+  # A release went out, so the site should say it is running that version rather than a
+  # commit from the same tree.
+  release:
+    types: [published]
+  schedule:
+    # 07:00 UTC, small hours in Mountain time. This is the one that catches upstream
+    # moving; off-peak so a slow fetch does not collide with anyone using the site.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A manual run during a scheduled one would race for the same deployment. Newest wins.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The page reports this, so a published site can be traced back to what built it.
+      # A release names its tag; anything else says which commit, the same way the
+      # container build does.
+      - name: build
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG:-${GITHUB_SHA:0:7}}"
+          go build -ldflags "-s -w -X main.version=${version}" -o vkstack ./cmd/vkstack
+
+      # The runner's cache starts empty every time, so this is a full fetch, and it is
+      # the step that decides how fresh the published site is.
+      - name: refresh
+        run: ./vkstack refresh
+
+      - name: generate
+        run: ./vkstack static --out dist
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # --branch=main marks this a production deploy, which is what the custom
+          # domain points at. Without it Pages treats the upload as a preview.
+          command: pages deploy dist --project-name=vkstack --branch=main

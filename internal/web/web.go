@@ -18,6 +18,12 @@ import (
 //go:embed all:assets
 var assets embed.FS
 
+// AssetsFS returns the UI files as they are served, so a static build can write the same
+// bytes to disk rather than keeping a second copy of them somewhere else.
+func AssetsFS() (fs.FS, error) {
+	return fs.Sub(assets, "assets")
+}
+
 // Loader rebuilds the graph, so the UI can pick up a refresh without a restart.
 type Loader func() (*graph.Graph, error)
 
@@ -37,6 +43,9 @@ type Config struct {
 	// Ledger records scheduled refresh attempts, so the UI can say whether the data is
 	// still moving rather than only how old it is. Optional.
 	Ledger *Ledger
+	// Version is the build serving the page. A static site is a snapshot of one build,
+	// so this is the only thing that says which one produced what you are reading.
+	Version string
 }
 
 // Server holds the handlers.
@@ -122,6 +131,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"fetchedAt": fetched.Format(time.RFC3339),
 		"ageHours":  int(time.Since(fetched).Hours()),
 		"readOnly":  s.cfg.ReadOnly,
+		"version":   s.cfg.Version,
 	}
 	if s.cfg.RefreshInterval > 0 {
 		resp["refreshInterval"] = s.cfg.RefreshInterval.String()

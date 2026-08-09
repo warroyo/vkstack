@@ -47,7 +47,7 @@ archives:
       - AGENTS.md
       - LICENSE
 
-checksums:
+checksum:
   name_template: "checksums.txt"
 
 changelog:

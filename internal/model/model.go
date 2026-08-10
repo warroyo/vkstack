@@ -48,6 +48,11 @@ type Product struct {
 	// Optional products are independent of each other. NSX and Avi are each opted into on
 	// their own, and all four combinations — neither, either one alone, both — are real
 	// deployments. Nothing may treat one as implying the other.
+	//
+	// They are also deliberately narrow in what they constrain: NSX and Avi are enforced
+	// against each other, the Supervisor and vCenter, and nothing else. The pairs upstream
+	// publishes against ESX are reported but never enforced — vCenter and ESX move
+	// together, so the host pair excludes nothing the vCenter pair does not.
 	Optional bool
 }
 
@@ -239,11 +244,15 @@ var Edges = []Edge{
 		Primary: true, Evidence: EvidencePublished,
 	},
 	{
-		From: "esx", To: "nsx", Label: "transport nodes",
-		Summary: "ESX hosts are prepared as NSX transport nodes.",
-		Prose: "NSX prepares the ESX hosts as transport nodes and installs its data plane " +
-			"on them, so the host version gates which NSX versions can be deployed.",
-		Primary: true, Evidence: EvidencePublished,
+		From: "esx", To: "nsx", Label: "published directly",
+		Summary: "Published, but not enforced — vCenter is the pair that decides.",
+		Prose: "NSX does prepare the ESX hosts as transport nodes, and upstream publishes " +
+			"the pair. It is not enforced, because vCenter and ESX move together and NSX " +
+			"is already constrained against vCenter: adding the host pair rules out " +
+			"nothing the vCenter pair does not, and costs a great deal of search to " +
+			"discover that. NSX is constrained against vCenter, the Supervisor and Avi, " +
+			"and nothing else. This pair is looked up and reported.",
+		Evidence: EvidencePublished,
 	},
 	{
 		From: "nsx", To: "supervisor", Label: "networking",

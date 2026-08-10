@@ -146,6 +146,71 @@ func (g *Graph) Stacks(pins map[int]*Release, opts StackOptions) ([]Stack, *Stac
 	return nil, failure
 }
 
+// StackExists reports whether any complete valid stack contains the given pins.
+//
+// Same question as `len(Stacks(pins, opts)) > 0` and a great deal cheaper, because it is
+// allowed to answer in any order. Stacks assigns products in a fixed sequence so that the
+// first complete assignment it finds is the *newest* one — that ordering is the answer,
+// and it must not change. Here nothing is reported but the yes or no, so the search is
+// free to take whichever branch collapses fastest.
+//
+// That matters because the expensive case is a **no**. A yes returns on the first
+// complete assignment; a no has to exhaust the tree. ViableOptions asks this question once
+// per release of every product — a few hundred times per request — and most of those
+// answers are no. With NSX and Avi both in the solve, that was 24 seconds of a 43-second
+// request; the fixed order put Avi, far and away the most constrained product, fifth, so
+// every rejection was discovered at depth five instead of at the root.
+//
+// The rule is the textbook one for a constraint search: assign the most constrained
+// product first (fewest remaining candidates), and give up the moment one has none.
+func (g *Graph) StackExists(pins map[int]*Release, opts StackOptions) bool {
+	if _, ok := g.firstBadPin(pins); !ok {
+		return false
+	}
+	remaining := solveOrder(pins, opts)
+	if len(remaining) == 0 {
+		return true
+	}
+	assigned := make(map[int]*Release, len(model.Products))
+	maps.Copy(assigned, pins)
+	return g.searchAny(remaining, assigned, opts)
+}
+
+func (g *Graph) searchAny(remaining []int, assigned map[int]*Release, opts StackOptions) bool {
+	if len(remaining) == 0 {
+		return true
+	}
+
+	// Most-constrained-first, recomputed at every step: which product that is depends on
+	// what has already been assigned, so a fixed order cannot express it.
+	pick, best := -1, 0
+	var candidates []*Release
+	for i, productID := range remaining {
+		c := g.candidatesFor(productID, assigned, opts)
+		if len(c) == 0 {
+			return false // this branch is already dead; no need to look further
+		}
+		if pick == -1 || len(c) < best {
+			pick, best, candidates = i, len(c), c
+		}
+	}
+
+	productID := remaining[pick]
+	rest := make([]int, 0, len(remaining)-1)
+	rest = append(rest, remaining[:pick]...)
+	rest = append(rest, remaining[pick+1:]...)
+
+	for _, c := range candidates {
+		assigned[productID] = c
+		if g.searchAny(rest, assigned, opts) {
+			delete(assigned, productID)
+			return true
+		}
+		delete(assigned, productID)
+	}
+	return false
+}
+
 // firstBadPin reports the first pinned dependency pair that cannot hold.
 //
 // Pins are held to the same standard as releases the solver picks itself: inside a
@@ -252,10 +317,8 @@ func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int]
 	// A pin that no complete stack can contain has no viable options anywhere, including
 	// itself. Returning the pin regardless made a dead end look like a one-node answer:
 	// the map lit the selection, and callers could not tell it apart from a real result.
-	if len(pins) > 0 {
-		if stacks, _ := g.Stacks(pins, probe); len(stacks) == 0 {
-			return out
-		}
+	if len(pins) > 0 && !g.StackExists(pins, probe) {
+		return out
 	}
 
 	for _, p := range model.Products {
@@ -280,7 +343,7 @@ func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int]
 				continue
 			}
 			trial[p.ID] = r
-			if stacks, _ := g.Stacks(trial, probe); len(stacks) > 0 {
+			if g.StackExists(trial, probe) {
 				viable = append(viable, r)
 			}
 		}

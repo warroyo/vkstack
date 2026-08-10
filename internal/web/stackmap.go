@@ -486,6 +486,11 @@ func setProvenance(g *graph.Graph, node *mapNode, pins map[int]*graph.Release, r
 	best := (*graph.Stack)(nil)
 	for _, r := range rels {
 		trial[r.ProductID] = r
+		// Two questions, cheapest first: StackExists rejects without paying for the
+		// ordered search, and only the release that survives costs a real solve.
+		if !g.StackExists(trial, probe) {
+			continue
+		}
 		if stacks, _ := g.Stacks(trial, probe); len(stacks) > 0 {
 			best = &stacks[0]
 			break
@@ -787,7 +792,10 @@ func stackExistsWith(
 			}
 			trial[a.ProductID] = a
 			trial[b.ProductID] = b
-			if stacks, _ := g.Stacks(trial, opts); len(stacks) > 0 {
+			// Existence only — which stack it is never leaves this function. Asking
+			// Stacks would pay for the newest-first ordering nobody reads, and the
+			// answer here is usually no, which is the expensive direction.
+			if g.StackExists(trial, opts) {
 				return a, b, true
 			}
 		}
@@ -895,7 +903,7 @@ func hostsWithPin(g *graph.Graph, pins map[int]*graph.Release, vcenters []*graph
 			}
 			trial[vc.ProductID] = vc
 			trial[host.ProductID] = host
-			if stacks, _ := g.Stacks(trial, probe); len(stacks) > 0 {
+			if g.StackExists(trial, probe) {
 				out = append(out, host)
 				break
 			}

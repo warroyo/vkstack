@@ -263,3 +263,60 @@ func TestIncludeIsPerKeyAndIgnoresRequiredProducts(t *testing.T) {
 		t.Errorf("naming required products changed the stack: %v", keysIn(s))
 	}
 }
+
+// StackExists is an optimisation, so the only thing that matters about it is that it
+// never disagrees with the search it replaces. It explores in a different order — most
+// constrained first, rather than the fixed order that makes Stacks return the *newest*
+// stack — and a different order must not mean a different answer.
+func TestStackExistsAgreesWithStacks(t *testing.T) {
+	g := load(t, Options{})
+
+	products := []int{vc, esx, sup, vks, vkr, nsx, avi}
+	includes := [][]string{nil, {"nsx"}, {"avi"}, {"nsx", "avi"}}
+
+	checked, disagreed := 0, 0
+	for _, inc := range includes {
+		for _, patches := range []bool{false, true} {
+			opts := StackOptions{Limit: 1, IncludePatches: patches, Include: inc}
+
+			// No pins at all, then every single-product pin the caller could send.
+			pinSets := []map[int]*Release{{}}
+			for _, pid := range products {
+				for _, r := range g.ReleasesOf(pid) {
+					pinSets = append(pinSets, map[int]*Release{pid: r})
+				}
+			}
+			// And every pair of pins across two products, which is where an ordering
+			// bug would actually show up.
+			for _, a := range g.ReleasesOf(vc) {
+				for _, b := range g.ReleasesOf(sup) {
+					pinSets = append(pinSets, map[int]*Release{vc: a, sup: b})
+				}
+				for _, b := range g.ReleasesOf(avi) {
+					pinSets = append(pinSets, map[int]*Release{vc: a, avi: b})
+				}
+			}
+
+			for _, pins := range pinSets {
+				stacks, _ := g.Stacks(pins, opts)
+				want := len(stacks) > 0
+				got := g.StackExists(pins, opts)
+				checked++
+				if got != want {
+					disagreed++
+					if disagreed <= 3 {
+						var names []string
+						for id, r := range pins {
+							p, _ := model.ByID(id)
+							names = append(names, p.Key+" "+r.Raw)
+						}
+						sort.Strings(names)
+						t.Errorf("StackExists=%v but Stacks found %d, for include=%v patches=%v pins=%v",
+							got, len(stacks), inc, patches, names)
+					}
+				}
+			}
+		}
+	}
+	t.Logf("checked %d pin/option combinations, %d disagreements", checked, disagreed)
+}

@@ -28,7 +28,7 @@ flowchart TD
     VCENTER -.->|"published directly"| VKR
     SUPERVISOR -.->|"via VKS<br/><i>no published data</i>"| VKR
     VCENTER -->|"compute manager"| NSX
-    ESX -->|"transport nodes"| NSX
+    ESX -.->|"published directly"| NSX
     NSX -->|"networking"| SUPERVISOR
     VCENTER -->|"cloud connector"| AVI
     NSX -->|"segments"| AVI
@@ -54,7 +54,7 @@ flowchart TD
 - **vCenter → VKr** *(published in the matrix)* — vCenter also has a direct published edge to VKr, giving a second independent reference point. Like the VKS pair it is not a dependency — VKr is provisioned by VKS — so it informs rather than constrains.
 - **Supervisor → VKr** *(inferred — upstream publishes nothing for this pair)* — There is no published Supervisor-to-VKr data upstream. The relationship is real but has to be inferred through VKS and vCenter, so this tool reports it as inferred rather than verified.
 - **vCenter → NSX** *(published in the matrix)* — NSX is optional — plenty of vSphere runs without it — but where it is deployed the NSX manager registers vCenter as a compute manager, and that pairing is versioned. Upstream publishes this pair directly.
-- **ESX → NSX** *(published in the matrix)* — NSX prepares the ESX hosts as transport nodes and installs its data plane on them, so the host version gates which NSX versions can be deployed.
+- **ESX → NSX** *(published in the matrix)* — NSX does prepare the ESX hosts as transport nodes, and upstream publishes the pair. It is not enforced, because vCenter and ESX move together and NSX is already constrained against vCenter: adding the host pair rules out nothing the vCenter pair does not, and costs a great deal of search to discover that. NSX is constrained against vCenter, the Supervisor and Avi, and nothing else. This pair is looked up and reported.
 - **NSX → Supervisor** *(published in the matrix)* — A Supervisor can be enabled on NSX networking or on a vSphere Distributed Switch. On NSX, the NSX version gates which Supervisor versions can be enabled, and upstream publishes the pair. A Supervisor on VDS has no NSX in the picture at all, which is why NSX is optional rather than part of every stack.
 - **vCenter → Avi** *(published in the matrix)* — Avi Load Balancer — the product formerly sold as NSX Advanced Load Balancer — talks to vCenter through its vSphere cloud connector to place service engines, so the controller version is paired with vCenter. Upstream publishes this pair directly.
 - **NSX → Avi** *(published in the matrix)* — Where NSX and Avi are deployed together the Avi service engines attach to NSX segments, and the two versions are paired. This constrains a stack only when both are chosen: Avi on a vSphere Distributed Switch with no NSX anywhere is an ordinary deployment, and Avi never requires NSX.

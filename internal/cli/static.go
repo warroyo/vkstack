@@ -29,17 +29,64 @@ import (
 	"github.com/warroyo/vkstack/internal/web"
 )
 
-// siteData is everything the page needs, in one file.
+// siteData is one bundle file: every answer the page can give while a particular set of
+// optional layers is open.
 //
-// One bundle rather than a file per answer: it makes selecting a version instant instead
-// of a round trip, and it keeps versions out of file names, where upstream's `+` and `.`
-// would be at the mercy of whatever the static host does to a path.
+// There is one file per combination — `data.json` for the plain map, `data-nsx.json`,
+// `data-avi.json`, `data-nsx-avi.json` — and the page fetches only the one it needs.
+//
+// Opening a layer changes the whole answer, not a corner of it: which nodes are lit, how
+// each surviving node is narrowed, the edges, the recommendation. So the four states
+// cannot share storage. An earlier version stored one full answer plus three small deltas
+// on the grounds that `layers` and `lit` were identical across all four. They were — but
+// only because three of the server's five solve sites were dropping the include set. The
+// invariant was a bug wearing an optimisation's clothes, and it is not coming back.
+//
+// Splitting by file rather than shipping all four in one is what keeps that honest and
+// cheap: `layers` is three quarters of the bytes, and most readers never open either
+// optional layer, so they should never download or parse the other three states.
 type siteData struct {
-	Meta json.RawMessage `json:"meta"`
+	// Meta and StackMap are written only into the base file; the variant files carry
+	// nothing the page needs before a layer is opened.
+	Meta json.RawMessage `json:"meta,omitempty"`
 	// StackMap is the unpinned map: what the page shows before anything is selected.
-	StackMap json.RawMessage `json:"stackmap"`
-	// StackMaps is the pinned map for every clickable node, keyed product -> version.
+	StackMap json.RawMessage `json:"stackmap,omitempty"`
+	// StackMaps holds every clickable node's answer for this file's set of open layers,
+	// keyed product -> version. The unpinned map is stored under the empty product and
+	// version, so opening a layer before selecting anything is answerable too.
 	StackMaps map[string]map[string]json.RawMessage `json:"stackmaps"`
+}
+
+// bundleName is the file one set of open optional layers is written to.
+//
+// The `with` value is already canonicalised in model order by the client, so the mapping
+// is stable: "" -> data.json, "nsx,avi" -> data-nsx-avi.json. Commas become dashes
+// because a query-string separator has no business in a filename on a static host.
+func bundleName(with string) string {
+	if with == "" {
+		return "data.json"
+	}
+	return "data-" + strings.ReplaceAll(with, ",", "-") + ".json"
+}
+
+// optionalSubsets returns every combination of optional layers the page can be in, in a
+// stable order, canonicalised the same way the client builds the `with` parameter.
+//
+// Each optional product is opened on its own, so the page has 2^n states rather than n+1.
+// With two optional products that is four, which is what makes enumerating them viable.
+func optionalSubsets() []string {
+	keys := optionalKeys()
+	out := []string{""}
+	for i := 1; i < 1<<len(keys); i++ {
+		var chosen []string
+		for bit, key := range keys {
+			if i&(1<<bit) != 0 {
+				chosen = append(chosen, key)
+			}
+		}
+		out = append(out, strings.Join(chosen, ","))
+	}
+	return out
 }
 
 func newStaticCmd() *cobra.Command {
@@ -88,20 +135,27 @@ the CLI, the HTTP API and MCP.`),
 				return err
 			}
 
-			data, err := generate(handler)
+			bundles, err := generate(handler)
 			if err != nil {
 				return err
 			}
-			if err := writeSite(outDir, data); err != nil {
+			if err := writeSite(outDir, bundles); err != nil {
 				return err
 			}
 
-			count := 0
-			for _, versions := range data.StackMaps {
-				count += len(versions)
+			nodes := 0
+			for product, versions := range bundles[""].StackMaps {
+				if product != "" {
+					nodes += len(versions)
+				}
+			}
+			names := make([]string, 0, len(bundles))
+			for _, with := range optionalSubsets() {
+				names = append(names, bundleName(with))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
-				"wrote %s: %d pinned views plus the unpinned map\n", outDir, count)
+				"wrote %s: %d pinned views across %d bundles (%s)\n",
+				outDir, nodes, len(bundles), strings.Join(names, ", "))
 			return nil
 		},
 	}
@@ -121,14 +175,58 @@ func ask(handler http.Handler, path string) (json.RawMessage, error) {
 	return json.RawMessage(append([]byte(nil), rec.Body.Bytes()...)), nil
 }
 
-func generate(handler http.Handler) (*siteData, error) {
-	data := &siteData{StackMaps: map[string]map[string]json.RawMessage{}}
+// generate produces one bundle per combination of open optional layers, keyed by the
+// `with` value the client sends.
+func generate(handler http.Handler) (map[string]*siteData, error) {
+	subsets := optionalSubsets()
+	bundles := make(map[string]*siteData, len(subsets))
+	for _, with := range subsets {
+		bundles[with] = &siteData{StackMaps: map[string]map[string]json.RawMessage{}}
+	}
+	base := bundles[""]
 
 	var err error
-	if data.Meta, err = ask(handler, "/api/meta"); err != nil {
+	if base.Meta, err = ask(handler, "/api/meta"); err != nil {
 		return nil, err
 	}
-	if data.StackMap, err = ask(handler, "/api/stackmap"); err != nil {
+	if base.StackMap, err = ask(handler, "/api/stackmap"); err != nil {
+		return nil, err
+	}
+
+	put := func(product, version, with string, body json.RawMessage) {
+		maps := bundles[with].StackMaps
+		if maps[product] == nil {
+			maps[product] = map[string]json.RawMessage{}
+		}
+		maps[product][version] = body
+	}
+
+	// answer fetches one node's view once per combination of open optional layers.
+	answer := func(product, version string, base url.Values) error {
+		for _, with := range subsets {
+			q := url.Values{}
+			for k, v := range base {
+				q[k] = v
+			}
+			if with != "" {
+				q.Set("with", with)
+			}
+			path := "/api/stackmap"
+			if len(q) > 0 {
+				path += "?" + q.Encode()
+			}
+			body, err := ask(handler, path)
+			if err != nil {
+				return err
+			}
+			put(product, version, with, body)
+		}
+		return nil
+	}
+
+	// The unpinned map, under the empty product and version. Opening a layer before
+	// selecting anything is an ordinary thing to do.
+	if err := answer("", "", url.Values{}); err != nil {
 		return nil, err
 	}
 
@@ -144,7 +242,7 @@ func generate(handler http.Handler) (*siteData, error) {
 			} `json:"nodes"`
 		} `json:"layers"`
 	}
-	if err := json.Unmarshal(data.StackMap, &layout); err != nil {
+	if err := json.Unmarshal(base.StackMap, &layout); err != nil {
 		return nil, fmt.Errorf("reading the unpinned map: %w", err)
 	}
 
@@ -156,27 +254,22 @@ func generate(handler http.Handler) (*siteData, error) {
 			if version == "" {
 				version = node.Label
 			}
-			if _, seen := data.StackMaps[layer.Key][version]; seen {
+			if _, seen := base.StackMaps[layer.Key][version]; seen {
 				continue
 			}
 
-			q := url.Values{"product": {layer.Key}, "version": {version}}
-			body, err := ask(handler, "/api/stackmap?"+q.Encode())
-			if err != nil {
+			if err := answer(layer.Key, version,
+				url.Values{"product": {layer.Key}, "version": {version}}); err != nil {
 				return nil, err
 			}
-			if data.StackMaps[layer.Key] == nil {
-				data.StackMaps[layer.Key] = map[string]json.RawMessage{}
-			}
-			data.StackMaps[layer.Key][version] = body
 		}
 	}
 
-	return data, nil
+	return bundles, nil
 }
 
-// writeSite copies the UI onto disk next to the generated data.
-func writeSite(outDir string, data *siteData) error {
+// writeSite copies the UI onto disk next to the generated bundles.
+func writeSite(outDir string, bundles map[string]*siteData) error {
 	assets, err := web.AssetsFS()
 	if err != nil {
 		return err
@@ -214,12 +307,15 @@ func writeSite(outDir string, data *siteData) error {
 		return fmt.Errorf("writing the UI: %w", err)
 	}
 
-	bundle, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("encoding the site data: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(outDir, "data.json"), bundle, 0o644); err != nil {
-		return fmt.Errorf("writing the site data: %w", err)
+	for with, data := range bundles {
+		body, err := json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("encoding the %q site data: %w", with, err)
+		}
+		name := bundleName(with)
+		if err := os.WriteFile(filepath.Join(outDir, name), body, 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", name, err)
+		}
 	}
 	return nil
 }

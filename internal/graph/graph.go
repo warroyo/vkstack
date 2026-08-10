@@ -270,7 +270,8 @@ func productKeyList() string {
 }
 
 // Published reports whether upstream publishes compatibility data for a product pair.
-// Distinct from "nothing is compatible": three of the ten pairs in scope have no data.
+// Distinct from "nothing is compatible": seven of the twenty-one pairs in scope have no
+// data.
 func (g *Graph) Published(aProductID, bProductID int) bool {
 	return g.Coverage[pair(aProductID, bProductID)]
 }

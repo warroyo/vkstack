@@ -357,13 +357,14 @@ func TestHostsNarrowThroughThePin(t *testing.T) {
 		t.Fatalf("resolving Supervisor: %v", err)
 	}
 
-	unpinned := rawsOf(hostsWithPin(g, nil, []*graph.Release{vcRel}))
+	probe := graph.StackOptions{Limit: 1, IncludePatches: true}
+	unpinned := rawsOf(hostsWithPin(g, nil, []*graph.Release{vcRel}, probe))
 	if !slices.Contains(unpinned, "8.0U3a") {
 		t.Fatalf("without a pin the pairwise hosts stand, got %v", unpinned)
 	}
 
 	pinned := rawsOf(hostsWithPin(g,
-		map[int]*graph.Release{supRel.ProductID: supRel}, []*graph.Release{vcRel}))
+		map[int]*graph.Release{supRel.ProductID: supRel}, []*graph.Release{vcRel}, probe))
 	if slices.Contains(pinned, "8.0U3a") {
 		t.Errorf("8.0U3a cannot carry the pinned Supervisor but is still listed: %v", pinned)
 	}

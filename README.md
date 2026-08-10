@@ -1,7 +1,7 @@
 # vkstack
 
-Compatibility across vCenter, ESX, vSphere Supervisor, VKS and VKr, from the Broadcom
-Product Interoperability Matrix.
+Compatibility across vCenter, ESX, vSphere Supervisor, VKS and VKr — plus optional NSX
+and Avi Load Balancer — from the Broadcom Product Interoperability Matrix.
 
 > **Unofficial.** Not affiliated with or endorsed by Broadcom. Broadcom publishes no
 > public API for the interoperability matrix, so this calls the same private JSON
@@ -108,7 +108,7 @@ the binary.
 | `describe` | The whole agent-facing surface (commands, schemas, exit codes) as JSON |
 | `explain` | The dependency model (JSON; `--human` for prose, `--ascii` for a bare terminal) |
 | `refresh` | Pull the matrix into `~/.cache/vkstack/vkstack.db` |
-| `stack <product> <version>` | Solve a whole valid stack from one or more pinned versions |
+| `stack <product> <version>` | Solve a whole valid stack from one or more pinned versions (`--with nsx,avi` to include the optional components) |
 | `compat <product> <version>` | The raw pairwise answer for one release |
 | `check --vcenter … --esx …` | Validate a fully pinned stack; exit 6 if incompatible |
 | `products` / `releases` | What is in scope, and which pairs upstream publishes |
@@ -120,7 +120,7 @@ the binary.
 Output is JSON unless you ask otherwise: `--human` for tables and prose, `--csv` on the
 commands whose answer really is rows (`releases`, `compat`, `products`), or
 `VKSTACK_OUTPUT=human` to set a default for your shell. Product keys are `vcenter`,
-`esx`, `supervisor`, `vks`, `vkr`.
+`esx`, `supervisor`, `vks`, `vkr`, and the two optional ones, `nsx` and `avi`.
 
 ## The stack map
 
@@ -135,12 +135,28 @@ Only real dependencies constrain a stack. The chain is:
 VKr  →  VKS  →  Supervisor  →  vCenter  ↔  ESX
 ```
 
-The matrix also publishes vCenter against VKS and vCenter against VKr. Those are worth
-looking up, but they are not dependencies, because VKS runs on the Supervisor and VKr is
-provisioned by VKS, so they are reported and never enforced. Enforcing them produces
-combinations that are listed compatible yet cannot exist: vCenter 9.0.0.0 and VKS 3.7 are
-listed together, but vCenter 9.0.0.0 tops out at Supervisor 1.30 while VKS 3.7 needs
-1.32, so there is no Supervisor to put in the middle.
+NSX and Avi hang off that chain rather than sitting in it, and each is opted into on its
+own:
+
+```
+        NSX  ─┐
+              ├→  Supervisor
+        Avi  ─┘
+```
+
+Both are optional, and neither implies the other. They start as collapsed rows; open one
+and it becomes a layer like any other, with its own versions to pick from. Opening NSX
+leaves Avi closed, and Avi in front of a distributed switch with no NSX anywhere is an
+ordinary deployment.
+
+The matrix also publishes vCenter against VKS, vCenter against VKr, and ESX against Avi.
+Those are worth looking up, but they are not dependencies, because VKS runs on the
+Supervisor, VKr is provisioned by VKS, and Avi's service engines are placed through
+vCenter — so they are reported and never enforced. Enforcing them produces combinations
+that are listed compatible yet cannot exist: vCenter 9.0.0.0 and VKS 3.7 are listed
+together, but vCenter 9.0.0.0 tops out at Supervisor 1.30 while VKS 3.7 needs 1.32, so
+there is no Supervisor to put in the middle. ESX × Avi fails the other way — the grid is
+so nearly empty that enforcing it would leave one legal combination.
 
 A node is lit when a complete valid stack exists containing it and your selection,
 enforcing the chain above. `vkstack check` reports the non-dependency pairs separately,
@@ -153,7 +169,7 @@ having tested it, and a dotted one means it published no result for that pair an
 link is inferred from the rest of the stack. Upstream footnotes on a result, such as
 "Running Supervisor is compatible after VC upgrade", are shown rather than dropped.
 
-Three things are grouped deliberately.
+Four things are grouped deliberately.
 
 - Supervisor is split by release train. The same Kubernetes version ships on two
   trains that are *not* interchangeable: `vsc9.x` ships with vCenter 9.x, `vsc0.x` is
@@ -166,6 +182,9 @@ Three things are grouped deliberately.
 - ESX is not a layer. Its release lines are identical to vCenter's and it has no
   published data against VKS or VKr, so it appears as "on ESX 9.1 · 9.0 · 8.0U3" under
   each vCenter node instead of a row nobody can branch from.
+- NSX and Avi are grouped by major.minor line, since neither carries a Kubernetes
+  version to group on: NSX `9.1` covers 9.1.0.0 through 9.1.0.0200, Avi `32.1` covers
+  32.1.1 and 32.1.2.
 
 ### Support lifecycle
 
@@ -287,10 +306,16 @@ republished from GitHub Actions on every push to `main`, on every release, and n
 pick up upstream. The page footer names the build that generated it.
 
 This works because the map pins one version at a time, so the questions it can ask are
-finite: the build drives all 55 of them — the unpinned map plus one per clickable node —
-through the same handlers `serve` uses, and ships the answers as a single bundle the page
-loads on start. The generated site and a hosted one cannot disagree, because the same code
-produced both. Selecting a version becomes a lookup rather than a round trip.
+finite: the build drives all 65 of them — the unpinned map plus one per clickable node —
+through the same handlers `serve` uses and ships the answers alongside the page. The
+generated site and a hosted one cannot disagree, because the same code produced both.
+Selecting a version becomes a lookup rather than a round trip.
+
+Opening NSX or Avi changes every answer on the map, not a corner of it, so each
+combination of open optional layers gets its own bundle — `data.json`, `data-nsx.json`,
+`data-avi.json`, `data-nsx-avi.json` — and the page fetches only the one it is showing.
+Most readers run neither, and they should not download the other three states to find
+that out.
 
 What it does not carry is the rest of the tool. Multi-pin solves (`stack --vcenter …
 --vks …`) and `check` span combinations that cannot be enumerated ahead of time, and they
@@ -302,11 +327,32 @@ nothing running that could refresh itself.
 
 ## Two things worth knowing
 
-Three of the ten product pairs have no upstream data. ESX × VKS, ESX × VKr and
-Supervisor × VKr return nothing at all. So "compatible", "incompatible" and "no data
-published" are kept distinct everywhere, and a stack is never reported as verified on a
-pair that was never published. The Supervisor × VKr gap is the one that matters, and it is
-inferred through vCenter and VKS.
+NSX and Avi are optional, and independent of each other. Neither appears in a solved
+stack unless you pin it or ask for it, because neither is in every deployment: a
+Supervisor runs on NSX networking, or on a vSphere Distributed Switch with Avi in front
+of it, or on neither. Asking for one never brings in the other — **Avi does not require
+NSX** — and a stack that says nothing about NSX is a complete answer about the five core
+components, not a claim that you have no NSX.
+
+```sh
+vkstack stack vcenter 9.1.0.0300 --with nsx        # NSX, no Avi
+vkstack stack vcenter 9.1.0.0300 --with avi        # Avi on VDS, no NSX
+vkstack stack vcenter 9.1.0.0300 --with nsx,avi    # both
+vkstack stack --avi 32.1.2                         # a pin is its own opt-in
+```
+
+In the web UI they are two collapsed rows you open one at a time.
+
+Seven of the twenty-one product pairs have no upstream data. ESX × VKS, ESX × VKr,
+Supervisor × VKr, and NSX and Avi each against VKS and VKr return nothing at all. So
+"compatible", "incompatible" and "no data published" are kept distinct everywhere, and a
+stack is never reported as verified on a pair that was never published. The
+Supervisor × VKr gap is the one that matters, and it is inferred through vCenter and VKS.
+
+One published pair is deliberately never enforced: ESX × Avi exists upstream but is
+nearly empty — three cells in the whole grid say yes. Avi's service engines are placed
+through vCenter, so vCenter is the pair that decides. Enforcing ESX × Avi would rule out
+Avi deployments that plainly work, so it is reported and never used to include or exclude.
 
 A missing pair and a missing *cell* are different things. Inside a pair upstream does
 publish, two releases with no result between them are not an open question. That is the
@@ -314,9 +360,10 @@ matrix declining to list them together, so they cannot appear in one stack, whet
 solver picked them or you pinned them. Pinning two such releases reports that they are
 never listed together, rather than solving a stack around a combination nobody published.
 
-Only vCenter and ESX 8.0 U3 and later are in scope. Supervisor, VKS and VKr have no
-hardcoded floor; they are filtered by reachability instead, so anything that only ever
-worked with vSphere 7 drops out on its own. `--all-versions` disables the floor and
+Only vCenter and ESX 8.0 U3 and later are in scope. Supervisor, VKS, VKr, NSX and Avi
+have no hardcoded floor; they are filtered by reachability instead, so anything that only
+ever worked with vSphere 7 drops out on its own — which is what retires the older NSX and
+Avi lines without inventing a cutoff. `--all-versions` disables the floor and
 `--min-version vcenter=9.0.0.0` moves it. The floor is applied when the cache is read, not
 when it is written, so changing it never needs a refetch.
 
@@ -387,7 +434,7 @@ The upstream auth key is public, a literal in the interop SPA's JavaScript bundl
 it is deliberately not checked into this repo and not cached to disk. Every `refresh`
 fetches the SPA shell, finds the `main.<hash>.js` it references, and pulls both the key
 and the service URL out of it (`internal/api/rediscover.go`). That is two extra requests
-per refresh, against eleven that were happening anyway, and a rotation between runs is
+per refresh, against twenty-two that were happening anyway, and a rotation between runs is
 invisible. A rotation *during* a run costs one retry: any 401/403 discards the key,
 re-derives it and repeats the call once.
 

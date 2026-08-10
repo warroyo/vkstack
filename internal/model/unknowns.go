@@ -57,6 +57,30 @@ func Unknowns(covered Coverage) []Unknown {
 
 	out = append(out,
 		Unknown{
+			Title: "Which optional components a deployment actually has",
+			Detail: "NSX and Avi are each present in some deployments and absent from others, " +
+				"and nothing upstream says which. A Supervisor can run on NSX networking or on " +
+				"a vSphere Distributed Switch with Avi in front of it, or on neither.",
+			Consequence: "A solved stack leaves NSX and Avi out unless you ask for them, so an " +
+				"answer that does not mention NSX is not a claim that you have no NSX — it is " +
+				"a claim about the five components that are always there.",
+			Workaround: "Pin a version (`--nsx 9.1.0.0200`) or opt in by name " +
+				"(`--with nsx`, `--with avi`, `--with nsx,avi`). The two are independent: " +
+				"asking for one never pulls in the other.",
+		},
+		Unknown{
+			Title: "Whether Avi and ESX versions really are that restricted",
+			Detail: "Upstream publishes an ESX × Avi pair, but almost every cell in it is " +
+				"empty — at the time of writing three say yes, all of them Avi 32.1.1 against " +
+				"ESX 9.1.x. Avi is not deployed onto hosts directly; its service engines are " +
+				"placed through vCenter.",
+			Consequence: "This tool reports the pair but never enforces it. Enforcing it would " +
+				"rule out Avi deployments that plainly work, so a stack can be called valid " +
+				"even though the ESX × Avi cell is blank.",
+			Workaround: "`vkstack compat avi <version>` shows the pair as it is published, " +
+				"blanks and all.",
+		},
+		Unknown{
 			Title: "Whether an upgrade is actually safe to perform",
 			Detail: "The matrix says which versions may coexist. It says nothing about " +
 				"order, downtime, data migration, or whether a given hop is supported as an " +
@@ -107,5 +131,10 @@ func GroupingNotes() []string {
 			"Supervisor 1.26–1.28, while 8.0U3k takes 1.31–1.33.",
 		"ESX is not shown as a layer. Its release lines mirror vCenter's and it has no " +
 			"published data against VKS or VKr, so it appears as the hosts each vCenter runs on.",
+		"NSX and Avi are grouped by their major.minor line — NSX 9.1 covers 9.1.0.0 " +
+			"through 9.1.0.0200, Avi 32.1 covers 32.1.1 and 32.1.2.",
+		"NSX and Avi are optional layers and start collapsed. Expanding or pinning one " +
+			"has no effect on the other: they are separate choices, and Avi does not " +
+			"require NSX.",
 	}
 }

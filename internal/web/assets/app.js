@@ -16,7 +16,33 @@ const state = {
   meta: null,         // the cache snapshot this page is reading, for the manifest
   filter: "",         // free-text narrowing of the version lists
   view: "stack",      // which tab is showing
+  deadEnd: null,      // why the current selection reaches no stack, when it does not
+  // Optional layers the reader has opened, by product key. NSX and Avi are not in every
+  // deployment, so they start closed and the core stack still reads as four rows.
+  //
+  // They are independent of each other throughout: opening NSX says nothing about Avi,
+  // and Avi in front of a distributed switch with no NSX anywhere is an ordinary
+  // deployment. Nothing here may ever open one because the other is open.
+  include: [],
 };
+
+const isOpen = (layer) => !layer.optional || state.include.includes(layer.key);
+
+// openLayer opens one optional layer, leaving every other layer as it was.
+function openLayer(key) {
+  if (state.include.includes(key)) return false;
+  state.include = [...state.include, key];
+  return true;
+}
+
+// OPTIONAL_ORDER canonicalises the `with` parameter.
+//
+// The value is a cache key on a static build, where every answer was enumerated ahead of
+// time, so "nsx,avi" and "avi,nsx" have to be the same string or half the lookups miss.
+// This is the model's own product order.
+const OPTIONAL_ORDER = ["nsx", "avi"];
+const withParam = () =>
+  OPTIONAL_ORDER.filter((k) => state.include.includes(k)).join(",");
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const svgEl = (tag, attrs = {}, text = null) => {
@@ -49,33 +75,56 @@ const el = (tag, attrs = {}, ...kids) => {
 // by the same handlers that would have answered over HTTP, and shipped as one bundle, so
 // selecting a version is a lookup rather than a round trip. `vkstack static` sets the
 // flag; `vkstack serve` leaves it unset and the requests below are real.
-let bundle = null;
-function siteData() {
-  if (!bundle) {
-    bundle = fetch("data.json").then((res) => {
-      if (!res.ok) throw new Error(`could not load the site data (${res.status})`);
+// One bundle per set of open optional layers, fetched on demand and kept once fetched.
+//
+// Opening NSX or Avi changes every answer on the map, so the four states cannot share a
+// file. Splitting them means the first load carries only the plain map: `layers` is three
+// quarters of the bytes and most readers never open either layer, so they should not
+// download or parse the other three states to find that out.
+const bundles = new Map();
+
+function bundleName(withKey) {
+  return withKey ? `data-${withKey.replace(/,/g, "-")}.json` : "data.json";
+}
+
+function siteData(withKey = "") {
+  if (!bundles.has(withKey)) {
+    const name = bundleName(withKey);
+    bundles.set(withKey, fetch(name).then((res) => {
+      if (!res.ok) throw new Error(`could not load the site data (${name}: ${res.status})`);
       return res.json();
-    });
+    }));
   }
-  return bundle;
+  return bundles.get(withKey);
 }
 
 async function apiStatic(path) {
   const url = new URL(path, location.href);
-  const data = await siteData();
 
   switch (url.pathname) {
     case "/api/meta":
-      return data.meta;
+      // meta and the default map live only in the base bundle; the variants carry
+      // nothing the page needs before a layer is opened.
+      return (await siteData()).meta;
     case "/api/stackmap": {
       const product = url.searchParams.get("product");
       const version = url.searchParams.get("version");
-      if (!product || !version) return data.stackmap;
-      const pinned = data.stackmaps?.[product]?.[version];
+      // Which optional layers are open picks the bundle, because it changes the whole
+      // answer — which nodes are lit and how each is narrowed, not only the recommendation.
+      const withKey = url.searchParams.get("with") || "";
+      const data = await siteData(withKey);
+
+      const answer = !product || !version
+        ? data.stackmaps?.[""]?.[""]
+        : data.stackmaps?.[product]?.[version];
       // Only reachable if the bundle and the UI disagree about what is clickable, which
       // means the build is stale rather than the selection being wrong.
-      if (!pinned) throw new Error(`this build has no answer for ${product} ${version}`);
-      return pinned;
+      if (!answer) {
+        if (!product || !version) return (await siteData()).stackmap;
+        throw new Error(`this build has no answer for ${product} ${version}` +
+          (withKey ? ` with ${withKey}` : ""));
+      }
+      return answer;
     }
   }
   throw new Error(`unknown path ${url.pathname}`);
@@ -98,11 +147,17 @@ async function api(path) {
 let inFlight = 0;
 
 async function loadStack() {
-  let url = "/api/stackmap";
+  const params = new URLSearchParams();
   if (state.pin) {
-    url += `?product=${encodeURIComponent(state.pin.product)}` +
-           `&version=${encodeURIComponent(state.pin.version)}`;
+    params.set("product", state.pin.product);
+    params.set("version", state.pin.version);
   }
+  // The server needs to know which optional layers are open: a reader who opened the NSX
+  // row is asking which NSX version goes with their selection, and the recommended stack
+  // has to answer that rather than stay silent about it.
+  if (withParam()) params.set("with", withParam());
+  const query = params.toString();
+  const url = "/api/stackmap" + (query ? "?" + query : "");
 
   const ticket = ++inFlight;
   // The previous answer stays on screen, dimmed, until this one lands. A blank frame
@@ -123,10 +178,24 @@ async function loadStack() {
   $("#stack-error").classList.add("hidden");
 
   state.layers = data.layers;
+  // A pin on an optional layer is its own opt-in, and a saved link can carry one without
+  // `with`. Open that layer — and only that one — and ask again.
+  //
+  // The reload is not optional. Which layers are open changes the whole answer, so the
+  // response in hand was solved for a map that did not include this row: it lit no nodes
+  // in it and drew no edges to the pinned node. Rendering that put the reader's own
+  // selection on screen connected to nothing.
+  const pinnedLayer = state.layers.find((l) => l.key === state.pin?.product);
+  if (pinnedLayer?.optional && openLayer(pinnedLayer.key)) {
+    syncURL(false);
+    return loadStack();
+  }
+
   state.lit = data.lit ? new Set(data.lit) : null;
   state.recommended = data.recommended || null;
   state.provenance = data.provenance || null;
   state.edges = data.edges || [];
+  state.deadEnd = data.deadEnd || null;
 
   renderMap();
   renderStrata();
@@ -215,7 +284,10 @@ function renderMap() {
   // Bottom-up: layers[0] is vCenter, and row 0 sits at the bottom of the drawing.
   // The pinned node is always drawn: hiding your own selection because the legacy
   // filter came on afterwards leaves a map that answers a question nobody asked.
-  const rows = state.layers.map((layer) => ({
+  //
+  // A closed optional layer is not drawn at all. It is not part of the stack the reader
+  // is looking at, and a dark row for something they do not run is noise.
+  const rows = state.layers.filter(isOpen).map((layer) => ({
     layer,
     nodes: layer.nodes.filter((n) =>
       state.lit?.has(n.id) &&
@@ -225,9 +297,23 @@ function renderMap() {
   // A pin with no complete stack is not the same as no pin. Both used to draw nothing.
   if (rows.every((r) => r.nodes.length === 0)) {
     resetMap();
-    host.append(el("p", { class: "map-empty is-dead-end" },
+    const box = el("p", { class: "map-empty is-dead-end" },
       `No complete stack exists with ${labelFor(state.pin.product)} ${state.pin.version}` +
-      (state.hideLegacy ? " among non-legacy releases." : ".")));
+      (state.hideLegacy ? " among non-legacy releases." : "."));
+    // The solver knows why. Without this the reader cannot tell a gap in the data from an
+    // incompatibility from a layer they opened a moment ago.
+    if (state.deadEnd?.reason) {
+      box.append(el("span", { class: "dead-end-reason" }, state.deadEnd.reason));
+    }
+    if (state.deadEnd?.closeLayer) {
+      const key = state.deadEnd.closeLayer;
+      box.append(el("button", {
+        class: "ghost inline",
+        type: "button",
+        onclick: () => toggleLayer(key),
+      }, `Remove ${labelFor(key)}`));
+    }
+    host.append(box);
     caption.textContent = "";
     return;
   }
@@ -559,6 +645,25 @@ function renderStrata() {
           el("span", { class: "narrowed" }, String(litCount)), ` of ${total}`)
       : el("div", { class: "layer-count" }, `${total}`);
 
+    // A closed optional layer collapses to one row saying when it applies. Each has its
+    // own toggle and its own state — opening NSX must never open Avi.
+    if (!isOpen(layer)) {
+      root.append(
+        el("div", { class: "layer is-optional is-closed" },
+          el("div", { class: "layer-spine" },
+            el("div", { class: "layer-name" }, layer.label),
+            el("div", { class: "layer-count" }, `${total}`)),
+          el("div", { class: "layer-nodes" },
+            el("button", {
+              class: "ghost inline layer-toggle",
+              type: "button",
+              "aria-expanded": "false",
+              onclick: () => toggleLayer(layer.key),
+            }, `Add ${layer.label}`),
+            layer.note ? el("span", { class: "layer-note" }, layer.note) : null)));
+      continue;
+    }
+
     const nodes = el("div", { class: "layer-nodes" });
     let hidden = 0;
     let filtered = 0;
@@ -576,12 +681,40 @@ function renderStrata() {
       nodes.append(el("span", { class: "hidden-count" }, `${filtered} filtered out`));
     }
 
+    if (layer.optional) {
+      nodes.append(el("button", {
+        class: "ghost inline layer-toggle",
+        type: "button",
+        "aria-expanded": "true",
+        onclick: () => toggleLayer(layer.key),
+      }, `Remove ${layer.label}`));
+    }
+
     root.append(
-      el("div", { class: "layer" },
+      el("div", { class: layer.optional ? "layer is-optional" : "layer" },
         el("div", { class: "layer-spine" },
           el("div", { class: "layer-name" }, layer.label), count),
         nodes));
   }
+}
+
+// toggleLayer opens or closes one optional layer.
+//
+// Closing a layer drops any pin that lived in it — leaving a pin on a hidden layer would
+// mean the map is solving for something the reader cannot see. Nothing else is touched:
+// the other optional layer keeps whatever state it had.
+function toggleLayer(key) {
+  const wasOpen = state.include.includes(key);
+  state.include = wasOpen
+    ? state.include.filter((k) => k !== key)
+    : [...state.include, key];
+
+  if (wasOpen && state.pin?.product === key) {
+    setPin(null);
+    return;
+  }
+  syncURL(true);
+  loadStack();
 }
 
 // strataKeys moves focus between versions with the arrow keys.
@@ -737,6 +870,9 @@ function currentURL() {
   }
   if (state.hideLegacy !== URL_DEFAULTS.legacy) params.set("legacy", "1");
   if (state.view !== URL_DEFAULTS.view) params.set("view", state.view);
+  // Which optional layers are open travels with the link, so a URL shared as "here is
+  // the Avi-only view" comes back as the Avi-only view.
+  if (withParam()) params.set("with", withParam());
   const query = params.toString();
   return location.pathname + (query ? "?" + query : "");
 }
@@ -754,7 +890,10 @@ function syncURL(push) {
 }
 
 function readState() {
-  return { pin: state.pin, hideLegacy: state.hideLegacy, view: state.view };
+  return {
+    pin: state.pin, hideLegacy: state.hideLegacy, view: state.view,
+    include: state.include,
+  };
 }
 
 // applyURL seeds the app from the address bar. Returns whether the URL asked for
@@ -767,7 +906,17 @@ function applyURL() {
   state.pin = product && version ? { product, version } : null;
   $("#hide-legacy").checked = state.hideLegacy;
   state.view = params.get("view") === "usage" ? "usage" : "stack";
-  return params.has("product") || params.has("legacy") || params.has("view");
+  // Normalise rather than trust: the value is lowercased and filtered to keys that
+  // actually name an optional layer, so `?with=NSX` opens NSX and `?with=haproxy` opens
+  // nothing instead of half-applying.
+  const asked = (params.get("with") || "")
+    .split(",").map((k) => k.trim().toLowerCase()).filter(Boolean);
+  state.include = OPTIONAL_ORDER.filter((k) => asked.includes(k));
+  // A `with` that resolved to nothing did not ask for anything. Counting it anyway
+  // suppressed both the saved stack and the default vCenter pin, so `?with=` on its own
+  // opened the app on a blank map.
+  return params.has("product") || params.has("legacy") ||
+         params.has("view") || state.include.length > 0;
 }
 
 window.addEventListener("popstate", () => {
@@ -899,8 +1048,9 @@ function renderRecommended() {
 
   const dl = el("dl");
   let hiddenByFilter = 0;
-  // Bottom-up, matching the map above it.
-  for (const key of ["vcenter", "esx", "supervisor", "vks", "vkr"]) {
+  // Bottom-up, matching the map above it. NSX and Avi only appear when the reader has
+  // opted into them, which is exactly when the solver put one in the stack.
+  for (const key of ["vcenter", "esx", "nsx", "avi", "supervisor", "vks", "vkr"]) {
     const pick = state.recommended[key];
     if (!pick) continue;
     // The legacy filter is a view setting; the solver still reaches past it. A
@@ -947,8 +1097,10 @@ function renderRecommended() {
 // without which a stack that was true in August gets executed in October.
 
 // UPGRADE_ORDER mirrors model.UpgradeOrder: vCenter must be at or ahead of the hosts and
-// the Supervisor it manages, so it moves first; the guest clusters move last.
-const UPGRADE_ORDER = ["vcenter", "esx", "supervisor", "vks", "vkr"];
+// the Supervisor it manages, so it moves first; the guest clusters move last. NSX and Avi
+// sit in between — both are moved before the Supervisor that runs on them — and drop out
+// of the manifest entirely when the stack does not include them.
+const UPGRADE_ORDER = ["vcenter", "esx", "nsx", "avi", "supervisor", "vks", "vkr"];
 
 function buildManifest() {
   if (!state.recommended) return null;
@@ -987,6 +1139,8 @@ function buildManifest() {
 const EDGE_PROSE = {
   vcenter: "moves first — it must be at or ahead of the hosts and the Supervisor it manages",
   esx: "follows vCenter — the hosts the Supervisor runs on",
+  nsx: "optional — the networking the Supervisor runs on, moved before it",
+  avi: "optional — the load balancer in front of the Supervisor, moved before it",
   supervisor: "delivered and managed by vCenter, running on those hosts",
   vks: "runs on the Supervisor and provisions the guest clusters",
   vkr: "the guest cluster release VKS provisions — moves last",
@@ -1099,7 +1253,10 @@ function provenanceSentence(p) {
 }
 
 function labelFor(key) {
-  const known = { vcenter: "vCenter", esx: "ESX", supervisor: "Supervisor", vks: "VKS", vkr: "VKr" };
+  const known = {
+    vcenter: "vCenter", esx: "ESX", nsx: "NSX", avi: "Avi",
+    supervisor: "Supervisor", vks: "VKS", vkr: "VKr",
+  };
   return known[key] || key;
 }
 

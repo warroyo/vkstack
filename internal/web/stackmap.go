@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -81,6 +82,14 @@ func lineKey(p model.Product, r *graph.Release) string {
 		return r.Raw
 	case "vks":
 		// VKS's own minor line, e.g. "3.6" from "3.6.3+1.35".
+		if len(r.Version.Key) > 0 && len(r.Version.Key[0]) >= 2 {
+			return fmt.Sprintf("%d.%d", r.Version.Key[0][0], r.Version.Key[0][1])
+		}
+	case "nsx", "avi":
+		// Neither tracks a Kubernetes minor, so the default branch would fall through to
+		// the raw string and give NSX some thirty single-release nodes. Group by the
+		// major.minor line instead: NSX "9.1" covers 9.1.0.0 to 9.1.0.0200, Avi "32.1"
+		// covers 32.1.1 and 32.1.2.
 		if len(r.Version.Key) > 0 && len(r.Version.Key[0]) >= 2 {
 			return fmt.Sprintf("%d.%d", r.Version.Key[0][0], r.Version.Key[0][1])
 		}
@@ -165,6 +174,44 @@ type mapLayer struct {
 	Key   string    `json:"key"`
 	Label string    `json:"label"`
 	Nodes []mapNode `json:"nodes"`
+	// Optional marks a layer that is not part of every deployment. The client renders
+	// these collapsed until the reader opens one or a pin lands in it, so the core stack
+	// still reads as four rows for the many people who run neither NSX nor Avi.
+	//
+	// Optional layers are independent of each other: opening or pinning one says nothing
+	// about the other.
+	Optional bool `json:"optional,omitempty"`
+	// Note explains, in one line, when this layer applies. Shown on the collapsed row.
+	Note string `json:"note,omitempty"`
+}
+
+// optionalLayerNotes says when each optional layer is in the picture. Kept here rather
+// than in the client so the two cannot drift.
+var optionalLayerNotes = map[string]string{
+	"nsx": "Only when the Supervisor runs on NSX networking.",
+	"avi": "Only when Avi is the load balancer. Does not require NSX.",
+}
+
+// optionalFromQuery parses the `with` parameter into optional product keys.
+//
+// Unknown or non-optional keys are dropped rather than rejected: this comes from a query
+// string, and a stale bookmark should show the default map rather than an error page.
+// Keys are kept in model order so the result does not depend on how the client spelled it.
+func optionalFromQuery(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	asked := map[string]bool{}
+	for _, key := range strings.Split(raw, ",") {
+		asked[strings.ToLower(strings.TrimSpace(key))] = true
+	}
+	var out []string
+	for _, p := range model.Products {
+		if p.Optional && asked[p.Key] {
+			out = append(out, p.Key)
+		}
+	}
+	return out
 }
 
 // handleStackMap returns every layer bottom-up, plus — when something is pinned — the set
@@ -176,14 +223,19 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Layers run bottom-up: the base you build on first.
-	order := []string{"vcenter", "supervisor", "vks", "vkr"}
+	// Layers run bottom-up: the base you build on first. NSX and Avi sit between the
+	// hypervisor and the Supervisor, and come back marked Optional so the client can keep
+	// them collapsed.
+	order := []string{"vcenter", "nsx", "avi", "supervisor", "vks", "vkr"}
 	layers := make([]mapLayer, 0, len(order))
 	nodeReleases := map[string][]*graph.Release{}
 
 	for _, key := range order {
 		p, _ := model.ByKey(key)
-		layer := mapLayer{Key: p.Key, Label: p.Label}
+		layer := mapLayer{
+			Key: p.Key, Label: p.Label, Nodes: []mapNode{},
+			Optional: p.Optional, Note: optionalLayerNotes[p.Key],
+		}
 
 		grouped := map[string][]*graph.Release{}
 		var lineOrder []string
@@ -232,10 +284,23 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 			}
 			layer.Nodes = append(layer.Nodes, node)
 		}
+		// An optional layer with nothing in it is not worth a collapsed row: the reader
+		// would open it onto an empty shelf. The core layers always appear, empty or not,
+		// because their absence would read as a broken map rather than as no data.
+		if p.Optional && len(layer.Nodes) == 0 {
+			continue
+		}
 		layers = append(layers, layer)
 	}
 
 	resp := map[string]any{"layers": layers}
+
+	// Which optional layers the reader has opened. They are display state, but the
+	// recommended stack has to honour them: someone who opened the NSX row is asking
+	// which NSX version goes with their selection, and a recommendation that stays
+	// silent about it answers a different question. Each key stands alone.
+	include := optionalFromQuery(r.URL.Query().Get("with"))
+	resp["include"] = include
 
 	// A pin narrows every other layer to what can still form a complete stack. This is
 	// the same solver the CLI uses, so "lit" means a real stack exists — not merely that
@@ -252,9 +317,16 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 		// enforcing only the real dependencies. The matrix also publishes vCenter
 		// against VKS and VKr, but those are not dependencies — VKS runs on the
 		// Supervisor — so they are looked up, never used to include or exclude.
+		// One solve context, built once and threaded into every solve below. Each site
+		// used to construct its own StackOptions, and three of the five forgot Include —
+		// so the lit set, the node narrowing, the provenance badges and the ESX host
+		// annotation all described a stack without the optional layers the reader had
+		// opened, while the recommendation and the edges described one with them.
+		probe := graph.StackOptions{Limit: 1, IncludePatches: true, Include: include}
+
 		lit := map[string]bool{}
 		viable := map[string][]*graph.Release{}
-		for pid, rels := range g.ViableOptions(pins, graph.StackOptions{IncludePatches: true}) {
+		for pid, rels := range g.ViableOptions(pins, probe) {
 			p, _ := model.ByID(pid)
 			if p.Key == "esx" {
 				continue
@@ -278,14 +350,21 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 				vcenterReleases[r.Raw] = true
 			}
 		}
-		narrowNodes(g, layers, pins, viable, pinnedVCenter, vcenterReleases)
-		resp["edges"] = adjacentEdges(g, pins, order, layers, lit, nodeReleases)
+		narrowNodes(g, layers, pins, viable, pinnedVCenter, vcenterReleases, probe)
+		resp["edges"] = adjacentEdges(g, pins, layers, lit, nodeReleases, probe)
 
 		// The newest stack the solver can build from here, with the support phase of
 		// every release in it. The phase matters because the legacy filter is a view
 		// setting: the solver still reaches past it, so a recommendation can name a
 		// release the map is hiding, and it has to say so rather than look ordinary.
-		if best, _ := g.Stacks(pins, graph.StackOptions{Limit: 1, IncludePatches: true}); len(best) > 0 {
+		best, failure := g.Stacks(pins, probe)
+		if len(best) == 0 {
+			// A dead end is an answer, and the solver already knows why. Saying only
+			// "no complete stack exists" leaves the reader to guess whether they hit a
+			// gap in the data, an incompatibility, or a bug.
+			resp["deadEnd"] = deadEndReason(failure, include)
+		}
+		if len(best) > 0 {
 			recommended := map[string]any{}
 			for _, p := range model.Products {
 				rel := best[0].Releases[p.ID]
@@ -322,6 +401,7 @@ func narrowNodes(
 	viable map[string][]*graph.Release,
 	pinnedVCenter string,
 	vcenterReleases map[string]bool,
+	probe graph.StackOptions,
 ) {
 	for li := range layers {
 		for ni := range layers[li].Nodes {
@@ -339,14 +419,14 @@ func narrowNodes(
 			setPhase(node, rels)
 			node.Notes = phaseNotes(rels)
 			setPin(node)
-			setProvenance(g, node, pins, rels)
+			setProvenance(g, node, pins, rels, probe)
 			switch {
 			case layers[li].Key == "vcenter":
 				// A vCenter node is one release, and it keeps its ESX annotation — but
 				// the hosts have to answer the question being asked. ESX gates the
 				// Supervisor as much as vCenter does, so with something pinned above,
 				// the hosts that cannot carry it are not hosts for this selection.
-				hosts := hostsWithPin(g, pins, rels)
+				hosts := hostsWithPin(g, pins, rels, probe)
 				node.Hosts = rawsOf(hosts)
 				node.Detail = joinLimited(linesOf(hosts), 3)
 			case layers[li].Key == "supervisor":
@@ -398,7 +478,7 @@ func phaseNotes(rels []*graph.Release) []string {
 // rest of the stack's weak spots are still reported, in words, as belonging to the stack.
 // The check runs against the newest stack the solver can build through this node, which
 // is the stack a click on it leads to.
-func setProvenance(g *graph.Graph, node *mapNode, pins map[int]*graph.Release, rels []*graph.Release) {
+func setProvenance(g *graph.Graph, node *mapNode, pins map[int]*graph.Release, rels []*graph.Release, probe graph.StackOptions) {
 	trial := make(map[int]*graph.Release, len(pins)+1)
 	for k, v := range pins {
 		trial[k] = v
@@ -406,7 +486,7 @@ func setProvenance(g *graph.Graph, node *mapNode, pins map[int]*graph.Release, r
 	best := (*graph.Stack)(nil)
 	for _, r := range rels {
 		trial[r.ProductID] = r
-		if stacks, _ := g.Stacks(trial, graph.StackOptions{Limit: 1, IncludePatches: true}); len(stacks) > 0 {
+		if stacks, _ := g.Stacks(trial, probe); len(stacks) > 0 {
 			best = &stacks[0]
 			break
 		}
@@ -538,7 +618,42 @@ func describeSupervisor(rels []*graph.Release, pinnedVCenter string, vcenterRele
 	return detail, labels
 }
 
-// adjacentEdges finds the connections to draw between neighbouring layers.
+// layerPairs returns the layer-to-layer connections worth drawing, derived from the
+// model's real dependencies rather than from the order the layers happen to render in.
+//
+// A linear walk down the rendered layers used to be equivalent, because the layers were
+// the chain. They are not any more: NSX and Avi sit between vCenter and the Supervisor
+// without displacing the vCenter-to-Supervisor edge, and either can be absent.
+//
+// A collapsed optional layer contributes nothing. That keeps the default map identical
+// to what it was, and keeps the cost down — every candidate pair below costs one solve
+// per node combination.
+func layerPairs(byKey map[string]mapLayer, include []string) [][2]string {
+	rendered := func(key string) bool {
+		l, ok := byKey[key]
+		if !ok || len(l.Nodes) == 0 {
+			return false
+		}
+		if !l.Optional {
+			return true
+		}
+		return slices.Contains(include, key)
+	}
+
+	var out [][2]string
+	for _, e := range model.Edges {
+		if !e.Primary || !rendered(e.From) || !rendered(e.To) {
+			continue
+		}
+		from, _ := model.ByKey(e.From)
+		to, _ := model.ByKey(e.To)
+		lower, upper := model.OrderPair(from, to)
+		out = append(out, [2]string{lower.Key, upper.Key})
+	}
+	return out
+}
+
+// adjacentEdges finds the connections to draw between related layers.
 //
 // An edge is only drawn when a complete valid stack exists containing the pin and both
 // endpoints — the same standard as a lit node. Checking "some release of A works with
@@ -547,10 +662,10 @@ func describeSupervisor(rels []*graph.Release, pinnedVCenter string, vcenterRele
 func adjacentEdges(
 	g *graph.Graph,
 	pins map[int]*graph.Release,
-	order []string,
 	layers []mapLayer,
 	lit map[string]bool,
 	nodeReleases map[string][]*graph.Release,
+	probe graph.StackOptions,
 ) []mapEdge {
 	byKey := map[string]mapLayer{}
 	for _, l := range layers {
@@ -558,10 +673,8 @@ func adjacentEdges(
 	}
 
 	var out []mapEdge
-	probe := graph.StackOptions{Limit: 1, IncludePatches: true}
-
-	for i := 0; i+1 < len(order); i++ {
-		lower, upper := byKey[order[i]], byKey[order[i+1]]
+	for _, pair := range layerPairs(byKey, probe.Include) {
+		lower, upper := byKey[pair[0]], byKey[pair[1]]
 		for _, a := range lower.Nodes {
 			if !lit[a.ID] {
 				continue
@@ -767,12 +880,11 @@ func hostCandidates(g *graph.Graph, vcenters []*graph.Release) []*graph.Release 
 // unnarrowed list offers eleven ESX patches for a Supervisor the matrix publishes
 // against one of them. Each candidate is put through the same solver that decides
 // whether a node is lit, so the annotation and the recommended stack cannot disagree.
-func hostsWithPin(g *graph.Graph, pins map[int]*graph.Release, vcenters []*graph.Release) []*graph.Release {
+func hostsWithPin(g *graph.Graph, pins map[int]*graph.Release, vcenters []*graph.Release, probe graph.StackOptions) []*graph.Release {
 	candidates := hostCandidates(g, vcenters)
 	if len(pins) == 0 {
 		return candidates
 	}
-	probe := graph.StackOptions{Limit: 1, IncludePatches: true}
 	trial := make(map[int]*graph.Release, len(pins)+2)
 	var out []*graph.Release
 	for _, host := range candidates {
@@ -855,5 +967,50 @@ func keysOf(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// deadEndReason turns a solver failure into a sentence for the map.
+//
+// The map used to render a dead end as an unlit grid and nothing else, which reads as a
+// broken page rather than as a result. The CLI has always explained itself here; this is
+// the same explanation.
+func deadEndReason(failure *graph.StackFailure, include []string) map[string]any {
+	out := map[string]any{
+		"reason": "No combination of the other layers works with this selection.",
+	}
+	if failure == nil {
+		return out
+	}
+	switch {
+	case failure.PinConflict && failure.Unlisted:
+		out["reason"] = fmt.Sprintf(
+			"Upstream publishes %s against %s but never lists these two releases together, "+
+				"so they cannot appear in the same stack.",
+			failure.Against.Label, failure.BlockedProduct.Label)
+	case failure.PinConflict:
+		out["reason"] = fmt.Sprintf(
+			"The selected %s and %s are %s, so they cannot appear in the same stack.",
+			failure.Against.Label, failure.BlockedProduct.Label, statusWord(failure.Status))
+	case failure.Against.Key != "":
+		out["reason"] = fmt.Sprintf("No %s release works with the selected %s.",
+			failure.BlockedProduct.Label, failure.Against.Label)
+	}
+	// Naming the layers is only half the story when an optional one the reader just
+	// opened is what made the stack impossible: closing it again is the way out, and
+	// nothing else on screen says so. Either end of the failure can be that layer — a
+	// blocked optional product, or a required one blocked *against* an optional.
+	for _, p := range []model.Product{failure.BlockedProduct, failure.Against} {
+		if p.Optional && slices.Contains(include, p.Key) {
+			out["closeLayer"] = p.Key
+			break
+		}
+	}
+	if failure.BlockedProduct.Key != "" {
+		out["blockedProduct"] = failure.BlockedProduct.Key
+	}
+	if failure.Against.Key != "" {
+		out["against"] = failure.Against.Key
+	}
 	return out
 }

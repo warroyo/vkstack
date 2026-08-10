@@ -2,13 +2,19 @@ package graph
 
 import (
 	"maps"
+	"slices"
 	"sort"
 
 	"github.com/warroyo/vkstack/internal/model"
 	"github.com/warroyo/vkstack/internal/version"
 )
 
-// Stack is a complete, valid assignment of one release per product.
+// Stack is a complete, valid assignment of one release per product in the solve.
+//
+// Optional products (NSX, Avi) are absent unless the caller pinned them or asked for
+// them by key. A stack without an NSX release is a complete answer about the five
+// components every deployment has — not a partial one, and not a claim that the
+// deployment has no NSX.
 type Stack struct {
 	// Releases keyed by product id.
 	Releases map[int]*Release
@@ -22,9 +28,11 @@ type Stack struct {
 // Inferred returns dependency pairs in this stack that upstream does not publish — the
 // ones taken on trust.
 //
-// With the constraint set limited to real dependencies this is normally empty: all three
-// gaps in the matrix (ESX against VKS and VKr, Supervisor against VKr) fall on pairs that
-// are not dependencies, so nothing has to be inferred to validate a stack.
+// With the constraint set limited to real dependencies this is normally empty: all seven
+// gaps in the matrix fall on pairs that are not dependencies. Three are the long-standing
+// ones (ESX against VKS and VKr, Supervisor against VKr); the other four are NSX and Avi
+// against VKS and VKr, and neither optional component is a dependency of the guest
+// cluster layer. So nothing has to be inferred to validate a stack.
 func (s Stack) Inferred() []PairVerdict {
 	var out []PairVerdict
 	for _, v := range s.Verdicts {
@@ -42,7 +50,16 @@ type StackOptions struct {
 	// IncludePatches allows patch releases to be chosen. Off by default: a stack made
 	// of the latest patch of each line is what people actually want to see.
 	IncludePatches bool
+	// Include opts optional products into the solve, by product key.
+	//
+	// Optional products (NSX, Avi) are left out unless they are pinned or named here.
+	// Membership is per key and nothing is implied from one key to another: Include
+	// ["avi"] solves a stack with Avi and no NSX, which is an ordinary deployment.
+	Include []string
 }
+
+// wants reports whether an optional product should take part in the solve.
+func (o StackOptions) wants(key string) bool { return slices.Contains(o.Include, key) }
 
 // StackFailure explains why no valid stack exists for the given pins.
 type StackFailure struct {
@@ -64,13 +81,17 @@ type StackFailure struct {
 // Stacks solves for complete valid stacks given zero or more pinned releases.
 //
 // This is the headline query: pin one version and get back the whole stack, rather than
-// doing five pairwise lookups by hand.
+// doing a fistful of pairwise lookups by hand.
 //
 // Products are filled in most-constrained-first order (the Kubernetes chain before the
 // base layer), and a partial assignment is abandoned as soon as any *published* pair
-// against an already-assigned product is not compatible. Unpublished pairs — three of
-// the ten — cannot constrain anything, so they are skipped during the search and
+// against an already-assigned product is not compatible. Unpublished pairs — seven of
+// the twenty-one — cannot constrain anything, so they are skipped during the search and
 // reported afterwards as inferred.
+//
+// Optional products take part only when pinned or named in opts.Include, and each is
+// decided separately: opting into Avi does not bring NSX along, and an Avi-only stack
+// never consults the NSX × Avi pair.
 func (g *Graph) Stacks(pins map[int]*Release, opts StackOptions) ([]Stack, *StackFailure) {
 	limit := opts.Limit
 	if limit <= 0 {
@@ -87,7 +108,7 @@ func (g *Graph) Stacks(pins map[int]*Release, opts StackOptions) ([]Stack, *Stac
 		}
 	}
 
-	order := solveOrder(pins)
+	order := solveOrder(pins, opts)
 	assigned := make(map[int]*Release, len(model.Products))
 	maps.Copy(assigned, pins)
 
@@ -224,7 +245,9 @@ func (g *Graph) snapshotStack(assigned, pins map[int]*Release) Stack {
 // pins. That is one cheap solve per candidate — a few hundred in total.
 func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int][]*Release {
 	out := make(map[int][]*Release, len(model.Products))
-	probe := StackOptions{Limit: 1, IncludePatches: opts.IncludePatches}
+	// Include has to survive into the probe: a caller solving with --with nsx is asking
+	// what else can join *that* stack, not the one without NSX.
+	probe := StackOptions{Limit: 1, IncludePatches: opts.IncludePatches, Include: opts.Include}
 
 	// A pin that no complete stack can contain has no viable options anywhere, including
 	// itself. Returning the pin regardless made a dead end look like a one-node answer:
@@ -238,6 +261,14 @@ func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int]
 	for _, p := range model.Products {
 		if pinned, ok := pins[p.ID]; ok {
 			out[p.ID] = []*Release{pinned}
+			continue
+		}
+		// An optional product the caller did not ask for has no options, because it has
+		// no place in this stack. Listing them anyway reported alternatives for a product
+		// the same answer declared omitted — and, worse, the list was silently filtered
+		// through the *other* optional product's constraints, so `--with avi` and
+		// `--with nsx` returned different NSX alternatives for a stack containing neither.
+		if p.Optional && !opts.wants(p.Key) {
 			continue
 		}
 		trial := make(map[int]*Release, len(pins)+1)
@@ -268,20 +299,31 @@ func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int]
 //
 // The Kubernetes chain is filled before the base layer: Supervisor, VKS and VKr have far
 // fewer viable options per vCenter than the reverse, so choosing them first prunes the
-// search hardest.
-func solveOrder(pins map[int]*Release) []int {
+// search hardest. NSX and Avi sit between the two: more constrained than vCenter, less
+// than the Supervisor.
+//
+// Optional products only appear here when the caller pinned them or asked for them by
+// key. Each is decided on its own — no optional product implies another — so opting into
+// Avi alone produces an order with Avi in it and no NSX.
+func solveOrder(pins map[int]*Release, opts StackOptions) []int {
 	priority := map[string]int{
 		"supervisor": 0,
 		"vks":        1,
 		"vkr":        2,
-		"vcenter":    3,
-		"esx":        4,
+		"nsx":        3,
+		"avi":        4,
+		"vcenter":    5,
+		"esx":        6,
 	}
 	var out []int
 	for _, p := range model.Products {
-		if _, pinned := pins[p.ID]; !pinned {
-			out = append(out, p.ID)
+		if _, pinned := pins[p.ID]; pinned {
+			continue
 		}
+		if p.Optional && !opts.wants(p.Key) {
+			continue
+		}
+		out = append(out, p.ID)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, _ := model.ByID(out[i])

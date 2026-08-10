@@ -179,6 +179,22 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 type pinsRequest struct {
 	Pins    map[string]string `json:"pins"`
 	Patches bool              `json:"patches"`
+	// Include opts optional products (NSX, Avi) into the solve, by product key. Each is
+	// independent; a pin on one is already an opt-in for that one alone.
+	Include []string `json:"include"`
+}
+
+// include returns the requested optional product keys, dropping anything that is not an
+// optional product. The browser is not a trusted caller, and a stray key here should
+// widen nothing rather than fail the request.
+func (r pinsRequest) include() []string {
+	var out []string
+	for _, key := range r.Include {
+		if p, ok := model.ByKey(key); ok && p.Optional {
+			out = append(out, p.Key)
+		}
+	}
+	return out
 }
 
 func resolve(g *graph.Graph, in map[string]string) (map[int]*graph.Release, error) {
@@ -221,7 +237,7 @@ func (s *Server) handleStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := graph.StackOptions{Limit: 1, IncludePatches: req.Patches}
+	opts := graph.StackOptions{Limit: 1, IncludePatches: req.Patches, Include: req.include()}
 	stacks, failure := g.Stacks(pins, opts)
 
 	resp := map[string]any{}

@@ -14,7 +14,21 @@ const (
 	sup = 1378
 	vks = 1794
 	vkr = 820
+	nsx = 912
+	avi = 1795
 )
+
+// requiredCount is how many products a default solve must fill: everything except the
+// optional ones, which stay out unless pinned or asked for.
+func requiredCount() int {
+	n := 0
+	for _, p := range model.Products {
+		if !p.Optional {
+			n++
+		}
+	}
+	return n
+}
 
 // fixture builds a small, hand-checked snapshot: two versions per product, wired so that
 // the "new" set and the "old" set are each internally compatible and cross-incompatible.
@@ -37,10 +51,17 @@ func fixture() *store.Snapshot {
 			rel(42, vks, "3.4.0+v1.33", "Minor"),
 			rel(51, vkr, "1.36.1", "Minor"),
 			rel(52, vkr, "1.33.1", "Minor"),
+			rel(61, nsx, "9.0.0.0", "Major"),
+			rel(62, nsx, "4.2.0.0", "Minor"),
+			rel(71, avi, "32.1.1", "Major"),
+			rel(72, avi, "30.2.1", "Minor"),
+			// 73 is the awkward one: it fits the new vCenter and Supervisor but no NSX
+			// at all, so it solves on its own and only fails once NSX joins.
+			rel(73, avi, "31.2.1", "Minor"),
 		},
 	}
 
-	// Only the seven pairs the real API publishes.
+	// Only the pairs the real API publishes.
 	for _, pr := range model.Pairs() {
 		count := 1
 		if isUnpublished(pr) {
@@ -69,21 +90,48 @@ func fixture() *store.Snapshot {
 		// 8.0U2 ESX (below the floor) is compatible with the old vCenter, so it would
 		// survive were the floor not applied.
 		ok(13, 22),
+
+		// NSX follows the same two generations against everything it depends on.
+		ok(21, 61), ok(22, 62), no(21, 62), no(22, 61), // vCenter × NSX
+		ok(11, 61), ok(12, 62), no(11, 62), no(12, 61), // ESX × NSX
+		ok(31, 61), ok(32, 62), no(31, 62), no(32, 61), // NSX × Supervisor
+
+		// Avi likewise, plus the two cases the optionality rules turn on.
+		ok(21, 71), ok(22, 72), no(21, 72), no(22, 71), // vCenter × Avi
+		ok(31, 71), ok(32, 72), no(31, 72), no(32, 71), // Avi × Supervisor
+		ok(61, 71), ok(62, 72), no(61, 72), no(62, 71), // NSX × Avi
+		// ESX × Avi is published and says no to everything. It is not a dependency, so
+		// it must never block a stack — this is the fixture's guard against someone
+		// promoting the pair to Primary. Upstream's real grid is nearly this empty.
+		no(11, 71), no(12, 72), no(11, 72), no(12, 71),
+
+		// Avi 31.2.1 fits the new vCenter and Supervisor but no NSX.
+		ok(21, 73), ok(31, 73), no(61, 73), no(62, 73), no(11, 73),
 	}
 	return snap
 }
 
+// unpublishedPairs mirrors the gaps in the real matrix, lower product id first.
+var unpublishedPairs = map[[2]int]bool{
+	{esx, vks}: true,
+	{esx, vkr}: true,
+	{vkr, sup}: true,
+	{vkr, nsx}: true,
+	{nsx, vks}: true,
+	{vkr, avi}: true,
+	{vks, avi}: true,
+}
+
 func isUnpublished(pr [2]int) bool {
-	switch pr {
-	case [2]int{esx, vks}, [2]int{esx, vkr}, [2]int{vkr, sup}:
-		return true
-	}
-	// Pairs() normalises to lower id first, so check the normalised forms too.
 	a, b := pr[0], pr[1]
 	if a > b {
 		a, b = b, a
 	}
-	return (a == esx && b == vks) || (a == esx && b == vkr) || (a == sup && b == vkr)
+	if unpublishedPairs[[2]int{a, b}] {
+		return true
+	}
+	// The literals above are written in reading order, not id order.
+	return unpublishedPairs[[2]int{b, a}]
 }
 
 func load(t *testing.T, opts Options) *Graph {
@@ -180,7 +228,7 @@ func TestCheckThreeBuckets(t *testing.T) {
 }
 
 // Unverified pairs are a warning, not a failure: a stack whose only issue is missing
-// upstream data must still pass, or three of the ten pairs would fail every check.
+// upstream data must still pass, or seven of the twenty-one pairs would fail every check.
 func TestUnverifiedDoesNotFailCheck(t *testing.T) {
 	g := load(t, Options{})
 	pins := map[int]*Release{esx: g.Releases[11], vkr: g.Releases[51]} // unpublished pair
@@ -207,8 +255,11 @@ func TestStacksSolvesFromOnePin(t *testing.T) {
 		t.Fatal("expected at least one stack")
 	}
 	for i, s := range stacks {
-		if len(s.Releases) != len(model.Products) {
-			t.Errorf("stack %d is incomplete: %d of %d products", i, len(s.Releases), len(model.Products))
+		// Optional products are absent by default, so "complete" means every required
+		// product — not every product in the model.
+		if len(s.Releases) != requiredCount() {
+			t.Errorf("stack %d is incomplete: %d of %d required products",
+				i, len(s.Releases), requiredCount())
 		}
 		// Every returned stack must independently pass Check — this is the invariant
 		// the CLI's stack-then-check cross-verification relies on.
@@ -376,7 +427,8 @@ func TestUnlistedPinPairCannotFormAStack(t *testing.T) {
 	}
 }
 
-// An unpublished *product* pair still cannot constrain anything: three of the ten have no
+// An unpublished *product* pair still cannot constrain anything: seven of the twenty-one
+// have no
 // data by design, and demanding a cell there would rule out every stack.
 func TestUnpublishedPairStillPassesPinValidation(t *testing.T) {
 	g := load(t, Options{})

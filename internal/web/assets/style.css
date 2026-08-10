@@ -275,7 +275,26 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 
 .layer-count .narrowed { color: var(--signal); font-weight: 600; }
 
-.layer-nodes { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.layer-nodes { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+
+/* Optional layers — NSX and Avi. Neither is in every deployment, so they start closed
+   and read as an offer rather than as part of the stack. Each opens on its own: there is
+   no styling here that couples one to the other. */
+.layer.is-optional { border-left: 3px solid transparent; }
+.layer.is-optional.is-closed {
+  background: color-mix(in srgb, var(--panel) 92%, var(--muted));
+  border-left-color: var(--hair);
+}
+.layer.is-optional.is-closed .layer-name,
+.layer.is-optional.is-closed .layer-count { opacity: 0.62; }
+
+.layer-note {
+  font-size: 0.74rem;
+  color: var(--faint);
+  font-style: italic;
+}
+
+.layer-toggle { margin-left: 0; }
 
 .node {
   font: inherit;
@@ -914,3 +933,12 @@ button.ghost.inline { margin-left: 0.6rem; }
 .sw-mixed { background: transparent; border-color: var(--eos); border-style: dashed; }
 .sw-untested { background: transparent; border-color: var(--tg); border-style: dashed; }
 .sw-unverified { background: transparent; border-color: var(--muted); border-style: dotted; }
+
+/* The reason a selection reaches no stack. The map showing nothing is not an answer;
+   this is. */
+.dead-end-reason {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}

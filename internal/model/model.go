@@ -41,9 +41,21 @@ type Product struct {
 	Trains []string
 	// TrainNote explains what the trains mean, shown wherever they are.
 	TrainNote string
+	// Optional marks a component that is genuinely absent from many deployments. A stack
+	// that omits one is a complete answer, not a partial one, so the solver leaves it out
+	// unless the caller pins it or asks for it by name.
+	//
+	// Optional products are independent of each other. NSX and Avi are each opted into on
+	// their own, and all four combinations — neither, either one alone, both — are real
+	// deployments. Nothing may treat one as implying the other.
+	Optional bool
 }
 
-// Products are the five components in scope, in diagram order.
+// Products are the seven components in scope, in diagram order.
+//
+// Five are always part of a stack. NSX and Avi are Optional: they sit between the
+// hypervisor and the Supervisor, they are opted into individually, and a stack without
+// either is still a complete answer.
 //
 // VCF is deliberately absent: it is a wrapper bill-of-materials over these component
 // versions, not an independent compatibility axis.
@@ -59,9 +71,19 @@ var Products = []Product{
 		K8sMinorRun: -1, UpgradeOrder: 2,
 	},
 	{
+		Key: "nsx", ID: 912, Name: "VMware NSX", Label: "NSX",
+		Scheme: SchemeVSphere, Example: "9.1.0.0200",
+		K8sMinorRun: -1, UpgradeOrder: 3, Optional: true,
+	},
+	{
+		Key: "avi", ID: 1795, Name: "Avi Load Balancer", Label: "Avi",
+		Scheme: SchemeGeneric, Example: "32.1.2",
+		K8sMinorRun: -1, UpgradeOrder: 4, Optional: true,
+	},
+	{
 		Key: "supervisor", ID: 1378, Name: "VMware vSphere Supervisor", Label: "Supervisor",
 		Scheme: SchemeGeneric, Example: "v1.32.9+vmware.2-fips-vsc9.1.0.0200",
-		K8sMinorRun: 0, UpgradeOrder: 3,
+		K8sMinorRun: 0, UpgradeOrder: 5,
 		Trains: []string{"vsc9", "vsc0"},
 		TrainNote: "vsc9.x ships with vCenter 9.x; vsc0.x is versioned independently. " +
 			"The same Kubernetes version exists on both and they are not interchangeable.",
@@ -69,12 +91,12 @@ var Products = []Product{
 	{
 		Key: "vks", ID: 1794, Name: "vSphere Kubernetes Service", Label: "VKS",
 		Scheme: SchemeGeneric, Example: "3.7.0+v1.36",
-		K8sMinorRun: 1, UpgradeOrder: 4,
+		K8sMinorRun: 1, UpgradeOrder: 6,
 	},
 	{
 		Key: "vkr", ID: 820, Name: "vSphere Kubernetes releases", Label: "VKr",
 		Scheme: SchemeGeneric, Example: "1.36.1",
-		K8sMinorRun: 0, UpgradeOrder: 5,
+		K8sMinorRun: 0, UpgradeOrder: 7,
 	},
 }
 
@@ -208,6 +230,70 @@ var Edges = []Edge{
 			"as inferred rather than verified.",
 		Evidence: EvidenceInferred,
 	},
+	{
+		From: "vcenter", To: "nsx", Label: "compute manager",
+		Summary: "NSX registers vCenter as its compute manager.",
+		Prose: "NSX is optional — plenty of vSphere runs without it — but where it is " +
+			"deployed the NSX manager registers vCenter as a compute manager, and that " +
+			"pairing is versioned. Upstream publishes this pair directly.",
+		Primary: true, Evidence: EvidencePublished,
+	},
+	{
+		From: "esx", To: "nsx", Label: "transport nodes",
+		Summary: "ESX hosts are prepared as NSX transport nodes.",
+		Prose: "NSX prepares the ESX hosts as transport nodes and installs its data plane " +
+			"on them, so the host version gates which NSX versions can be deployed.",
+		Primary: true, Evidence: EvidencePublished,
+	},
+	{
+		From: "nsx", To: "supervisor", Label: "networking",
+		Summary: "The Supervisor can run on NSX networking, and then NSX gates it.",
+		Prose: "A Supervisor can be enabled on NSX networking or on a vSphere Distributed " +
+			"Switch. On NSX, the NSX version gates which Supervisor versions can be " +
+			"enabled, and upstream publishes the pair. A Supervisor on VDS has no NSX in " +
+			"the picture at all, which is why NSX is optional rather than part of every " +
+			"stack.",
+		Primary: true, Evidence: EvidencePublished,
+	},
+	{
+		From: "vcenter", To: "avi", Label: "cloud connector",
+		Summary: "The Avi controller drives vCenter through its cloud connector.",
+		Prose: "Avi Load Balancer — the product formerly sold as NSX Advanced Load " +
+			"Balancer — talks to vCenter through its vSphere cloud connector to place " +
+			"service engines, so the controller version is paired with vCenter. Upstream " +
+			"publishes this pair directly.",
+		Primary: true, Evidence: EvidencePublished,
+	},
+	{
+		From: "nsx", To: "avi", Label: "segments",
+		Summary: "When both are deployed, Avi service engines land on NSX segments.",
+		Prose: "Where NSX and Avi are deployed together the Avi service engines attach to " +
+			"NSX segments, and the two versions are paired. This constrains a stack only " +
+			"when both are chosen: Avi on a vSphere Distributed Switch with no NSX " +
+			"anywhere is an ordinary deployment, and Avi never requires NSX.",
+		Primary: true, Evidence: EvidencePublished,
+	},
+	{
+		From: "avi", To: "supervisor", Label: "load balancer",
+		Summary: "Avi is the Supervisor load balancer when the Supervisor is on VDS.",
+		Prose: "A Supervisor on VDS networking needs an external load balancer, and Avi is " +
+			"the supported choice. The pair is published, so where Avi is deployed it " +
+			"gates which Supervisor versions can be enabled. A Supervisor on NSX uses NSX " +
+			"load balancing instead and has no Avi in the picture.",
+		Primary: true, Evidence: EvidencePublished,
+	},
+	{
+		From: "esx", To: "avi", Label: "published directly",
+		Summary: "Published, but too sparse to enforce — Avi is placed through vCenter.",
+		Prose: "Upstream publishes an ESX-to-Avi pair, but it is almost entirely empty: at " +
+			"the time of writing three cells in the whole grid say yes, all of them Avi " +
+			"32.1.1 against ESX 9.1.x. Enforcing it would collapse every Avi-bearing " +
+			"stack to that one combination and rule out deployments that plainly work. " +
+			"Avi service engines are placed through vCenter, so vCenter is the pair that " +
+			"decides. This one is looked up and reported, never used to include or " +
+			"exclude.",
+		Evidence: EvidencePublished,
+	},
 }
 
 // IsDependency reports whether two products have a real dependency between them, and so
@@ -260,7 +346,10 @@ func IDs() []int {
 }
 
 // Pairs returns every unordered product-id pair, with the lower id first. These are the
-// pairs `refresh` probes and `pair_coverage` records.
+// twenty-one pairs `refresh` probes and `pair_coverage` records.
+//
+// Optional products are included: whether a deployment has NSX or Avi is a question for
+// the solver, not for the mirror, and the cache stays a dumb copy of upstream.
 func Pairs() [][2]int {
 	ids := IDs()
 	var out [][2]int

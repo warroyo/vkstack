@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"strings"
+
 	"github.com/spf13/cobra"
 
 	"github.com/warroyo/vkstack/internal/model"
@@ -32,6 +34,20 @@ The web UI is the surface for people; this CLI is the surface for agents.`,
 	}
 }
 
+// pinFlagDoc lists the per-product pin flags, generated from the model so the contract
+// cannot drift from the flags pinFlags actually registers.
+func pinFlagDoc() map[string]string {
+	out := make(map[string]string, len(model.Products))
+	for _, p := range model.Products {
+		doc := "version"
+		if p.Optional {
+			doc = "version (optional product: pinning it opts it into the stack)"
+		}
+		out["--"+p.Key] = doc
+	}
+	return out
+}
+
 func surface() map[string]any {
 	keys := make([]string, 0, len(model.Products))
 	for _, p := range model.Products {
@@ -41,8 +57,8 @@ func surface() map[string]any {
 	return map[string]any{
 		"tool": "vkstack",
 		"purpose": "Answer compatibility questions across vCenter, ESX, vSphere " +
-			"Supervisor, VKS and VKr from a local mirror of the Broadcom Product " +
-			"Interoperability Matrix.",
+			"Supervisor, VKS and VKr — plus optional NSX and Avi Load Balancer — from a " +
+			"local mirror of the Broadcom Product Interoperability Matrix.",
 		"output": map[string]any{
 			"default": "json",
 			"envelope": map[string]any{
@@ -57,15 +73,24 @@ func surface() map[string]any {
 			"errors": "failures print a vkstack.error document on stderr and never " +
 				"write to stdout, so stdout is either one valid envelope or empty",
 		},
-		"productKeys": keys,
+		"productKeys":         keys,
+		"optionalProductKeys": optionalKeys(),
 		"concepts": map[string]any{
 			"dependencyChain": []string{"vcenter", "esx", "supervisor", "vks", "vkr"},
 			"upgradeOrder":    model.UpgradeOrder(),
-			"enforcedPairs": "Only real dependencies constrain a stack. vCenter×VKS and " +
-				"vCenter×VKr are published but not dependencies: they are reported, " +
-				"never enforced.",
-			"unpublishedPairs": "ESX×VKS, ESX×VKr and Supervisor×VKr have no upstream " +
-				"data at all. Answers touching them are labelled inferred, never verified.",
+			"optionalProducts": "NSX and Avi are absent from a solved stack unless pinned " +
+				"or passed to `stack --with`. They are independent of each other: " +
+				"--with avi solves a stack with Avi and no NSX, which is an ordinary " +
+				"distributed-switch deployment. A stack without them is a complete " +
+				"answer about the five core products, not a claim that the deployment " +
+				"has no NSX.",
+			"enforcedPairs": "Only real dependencies constrain a stack. vCenter×VKS, " +
+				"vCenter×VKr and ESX×Avi are published but not dependencies: they are " +
+				"reported, never enforced. ESX×Avi in particular is almost entirely " +
+				"blank upstream, and enforcing it would rule out Avi deployments that work.",
+			"unpublishedPairs": "ESX×VKS, ESX×VKr, Supervisor×VKr, NSX×VKS, NSX×VKr, " +
+				"Avi×VKS and Avi×VKr have no upstream data at all. Answers touching them " +
+				"are labelled inferred, never verified.",
 			"supportPhases": []string{"general", "technical-guidance", "end-of-support"},
 			"testedVsNot": "Status 3 is 'compatible, not tested'. It counts as a yes when " +
 				"solving, and is always reported as its own state.",
@@ -96,22 +121,28 @@ func surface() map[string]any {
 				"name": "stack", "schema": "vkstack.stack", "needsCache": true,
 				"args": []string{"[product]", "[version]"},
 				"flags": map[string]string{
-					"--<product>": "pin a version, e.g. --vcenter 8.0U3k (repeat per product)",
-					"--patches":   "allow patch releases",
-					"--list":      "return several stacks (vkstack.stacks)",
+					"--<product>": "pin a version, e.g. --vcenter 8.0U3k (repeat per product). " +
+						"Pinning an optional product also opts it in.",
+					"--patches": "allow patch releases",
+					"--list":    "return several stacks (vkstack.stacks)",
+					"--with": "include optional products (" + strings.Join(optionalKeys(), ", ") +
+						"); repeatable or comma-separated, and each is independent",
 				},
 				"summary": "Solve a whole valid stack from one or more pinned versions. " +
 					"This is the headline query.",
 				"examples": []string{
 					"vkstack stack vcenter 8.0U3k",
 					"vkstack stack --vcenter 8.0U3k --vks 3.6.2",
+					"vkstack stack vcenter 9.1.0.0300 --with nsx",
+					"vkstack stack vcenter 9.1.0.0300 --with avi",
+					"vkstack stack vcenter 9.1.0.0300 --with nsx,avi",
 				},
 				"note": "The positional form takes exactly one product and version. To pin " +
 					"more than one product, use the per-product flags.",
 			},
 			{
 				"name": "check", "schema": "vkstack.check", "needsCache": true,
-				"flags":   map[string]string{"--vcenter": "version", "--esx": "version", "--supervisor": "version", "--vks": "version", "--vkr": "version"},
+				"flags":   pinFlagDoc(),
 				"summary": "Validate a pinned stack pair by pair. Exits 6 when the answer is no.",
 				"exitCodes": map[string]int{
 					"compatible": ExitOK, "incompatible": ExitIncompatible,

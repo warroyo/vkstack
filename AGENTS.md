@@ -189,6 +189,11 @@ Tools: `vkstack_stack`, `vkstack_check`, `vkstack_compat`, `vkstack_releases`,
 `vkstack_products`, `vkstack_model`. Each returns both a text block and
 `structuredContent`, so a client that supports structured results need not re-parse.
 
+`vkstack_stack` takes an optional `include` array naming the optional products to put in
+the stack — `["nsx"]`, `["avi"]`, or `["nsx", "avi"]`. Each stands alone; omit it for the
+five core products only. `vkstack_products` marks which products are `optional`, so the
+valid values are discoverable rather than something to hardcode.
+
 A failed call comes back as a tool result with `isError: true` and the reason in text,
 not as a protocol error — the model should be able to see what went wrong and retry.
 
@@ -199,20 +204,33 @@ no auth layer, so do not put this behind a network proxy without adding both.
 ## What to know before reasoning about the answers
 
 Call `vkstack explain` (schema `vkstack.model`) once and keep it in context. It carries
-the four things most likely to produce a confidently wrong conclusion:
+the six things most likely to produce a confidently wrong conclusion:
 
 1. **Only real dependencies constrain a stack.** The chain is
    `VKr → VKS → Supervisor → vCenter ↔ ESX`. The matrix *also* publishes vCenter against
-   VKS and vCenter against VKr, and those are **not** dependencies — VKS runs on the
-   Supervisor, VKr is provisioned by VKS. They are reported, never enforced. Enforcing
-   them produces combinations listed as compatible that cannot exist.
-2. **Three of the ten product pairs have no upstream data at all** (ESX×VKS, ESX×VKr,
-   Supervisor×VKr). "No data published" is not "incompatible", and the tool never reports
-   a stack as verified on a pair nobody published. Do not fill that gap with a guess.
-3. **A missing cell is a no.** Inside a pair upstream *does* publish, two releases with no
+   VKS, vCenter against VKr, and ESX against Avi, and those are **not** dependencies —
+   VKS runs on the Supervisor, VKr is provisioned by VKS, Avi is placed through vCenter.
+   They are reported, never enforced. Enforcing them produces combinations listed as
+   compatible that cannot exist, and rules out combinations that work.
+2. **NSX and Avi are optional, and independent of each other.** Neither is in a solved
+   stack unless it is pinned or named in `stack --with` / the MCP `include` array. All
+   four combinations are real deployments: neither, NSX alone, **Avi alone** (a
+   Supervisor on a distributed switch with Avi in front of it), or both. Asking for one
+   never brings in the other, and **Avi does not require NSX**. A stack that does not
+   mention NSX is a complete answer about the five core products — not a claim that the
+   deployment has no NSX.
+3. **ESX × Avi is published and almost entirely blank.** At the time of writing three
+   cells in the whole grid say yes, all of them Avi 32.1.1 against ESX 9.1.x. It is not a
+   dependency and is never enforced. If you enforce it yourself you will reject Avi
+   deployments that plainly work.
+4. **Seven of the twenty-one product pairs have no upstream data at all** (ESX×VKS,
+   ESX×VKr, Supervisor×VKr, NSX×VKS, NSX×VKr, Avi×VKS, Avi×VKr). "No data published" is
+   not "incompatible", and the tool never reports a stack as verified on a pair nobody
+   published. Do not fill that gap with a guess.
+5. **A missing cell is a no.** Inside a pair upstream *does* publish, two releases with no
    result between them are the matrix declining to list them together — not an open
    question.
-4. **"Compatible, not tested" is a real distinction.** Status 3 counts as a yes when
+6. **"Compatible, not tested" is a real distinction.** Status 3 counts as a yes when
    solving, and is always reported as its own state. Pass it on rather than flattening it.
 
 `data.unknowns` in `vkstack.model` lists every limit in the tool's own words, including
@@ -230,6 +248,14 @@ vkstack stack vcenter 8.0U3k --patches
 
 # Pin several layers at once
 vkstack stack vcenter 8.0U3k supervisor v1.32.9
+
+# Optional components. Each is opted into on its own; Avi does not require NSX.
+vkstack stack vcenter 9.1.0.0300 --with nsx
+vkstack stack vcenter 9.1.0.0300 --with avi
+vkstack stack vcenter 9.1.0.0300 --with nsx,avi
+
+# Pinning an optional component is its own opt-in
+vkstack stack --avi 32.1.2
 
 # Validate a stack you already have; exit 6 means incompatible
 vkstack check --vcenter 8.0U3k --esx 8.0U3 --supervisor v1.33.9+vmware.3-fips-vsc0.1.15

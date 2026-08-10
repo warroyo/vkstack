@@ -198,9 +198,15 @@ func (s *mcpServer) handle(req rpcRequest) rpcResponse {
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "vkstack", "version": "1"},
 			"instructions": "Compatibility across vCenter, ESX, vSphere Supervisor, VKS " +
-				"and VKr, from a local mirror of the Broadcom interoperability matrix. " +
+				"and VKr, plus optional NSX and Avi Load Balancer, from a local mirror of " +
+				"the Broadcom interoperability matrix. " +
 				"Start with vkstack_stack to solve a whole valid stack from one pinned " +
-				"version; vkstack_check validates a stack you already have. Answers are " +
+				"version; vkstack_check validates a stack you already have. " +
+				"NSX and Avi are optional and independent of each other: neither appears " +
+				"in a stack unless it is pinned or named in vkstack_stack's `include`, " +
+				"and a stack without them is a complete answer, not a partial one. " +
+				"Asking for one never brings in the other — Avi on a distributed switch " +
+				"with no NSX is an ordinary deployment. Answers are " +
 				"never invented: pairs upstream does not publish are reported as inferred.",
 		}
 	case "ping":
@@ -233,19 +239,29 @@ func mcpTools() []map[string]any {
 			"description": "Solve a whole valid stack from one or more pinned versions. " +
 				"The headline query: given vCenter 8.0U3k, what Supervisor, VKS and VKr " +
 				"can run with it. Returns the newest valid combination plus every " +
-				"alternative each layer could still take.",
+				"alternative each layer could still take. NSX and Avi are left out " +
+				"unless pinned or listed in `include`.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"pins": map[string]any{
 						"type": "object",
 						"description": "product key to version, e.g. " +
-							`{"vcenter": "8.0U3k"}. One is enough.`,
+							`{"vcenter": "8.0U3k"}. One is enough. Pinning an optional ` +
+							"product also opts it into the stack.",
 						"additionalProperties": map[string]any{"type": "string"},
 					},
 					"patches": map[string]any{
 						"type":        "boolean",
 						"description": "allow patch releases in the solution (default false)",
+					},
+					"include": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string", "enum": optionalKeys()},
+						"description": "optional products to include. Each is independent: " +
+							`["avi"] solves a stack with Avi and no NSX, which is an ` +
+							"ordinary distributed-switch deployment. Omit for the five " +
+							"core products only.",
 					},
 				},
 				"required": []string{"pins"},
@@ -331,6 +347,7 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 		Version string            `json:"version"`
 		Patches bool              `json:"patches"`
 		Legacy  bool              `json:"legacy"`
+		Include []string          `json:"include"`
 	}
 	if len(params.Arguments) > 0 {
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
@@ -399,7 +416,11 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 		if len(pins) == 0 {
 			return toolError("pin at least one version, e.g. {\"vcenter\": \"8.0U3k\"}")
 		}
-		opts := graph.StackOptions{Limit: 1, IncludePatches: args.Patches}
+		include, err := resolveInclude(args.Include)
+		if err != nil {
+			return toolError(classify(err).Message)
+		}
+		opts := graph.StackOptions{Limit: 1, IncludePatches: args.Patches, Include: include}
 		stacks, failure := gr.Stacks(pins, opts)
 		if len(stacks) == 0 {
 			// A dead end is an answer. It comes back as a result rather than an error so
@@ -413,7 +434,7 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 			}
 			return toolResult(out)
 		}
-		return toolResult(buildRecommendationJSON(stacks[0], gr.ViableOptions(pins, opts)))
+		return toolResult(buildRecommendationJSON(gr, stacks[0], gr.ViableOptions(pins, opts)))
 	}
 	return toolError("unknown tool: " + params.Name)
 }

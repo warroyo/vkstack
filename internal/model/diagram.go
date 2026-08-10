@@ -14,16 +14,24 @@ type Coverage func(aProductID, bProductID int) bool
 func AllPublished(int, int) bool { return true }
 
 // knownUnpublished is the set of product pairs upstream did not publish when this was
-// last verified against the live API (2026-08-08). It exists so `vkstack explain` and
+// last verified against the live API (2026-08-10). It exists so `vkstack explain` and
 // the generated docs/model.md are correct on a cold install with no cache.
+//
+// Seven of the twenty-one pairs. Every gap is against VKS or VKr: neither NSX nor Avi is
+// published against the guest-cluster layer, which is consistent with neither being a
+// dependency of it.
 //
 // A populated cache always overrides this — see the cache-backed Coverage in the CLI.
 // TestCoverageMatchesUpstream in internal/graph compares the two and fails if upstream
 // starts publishing a pair, which is the signal to update this list.
 var knownUnpublished = map[[2]int]bool{
-	{1, 1794}:   true, // ESX × VKS
-	{1, 820}:    true, // ESX × VKr
-	{820, 1378}: true, // VKr × Supervisor
+	{1, 1794}:    true, // ESX × VKS
+	{1, 820}:     true, // ESX × VKr
+	{820, 1378}:  true, // VKr × Supervisor
+	{820, 912}:   true, // VKr × NSX
+	{912, 1794}:  true, // NSX × VKS
+	{820, 1795}:  true, // VKr × Avi
+	{1794, 1795}: true, // VKS × Avi
 }
 
 // DefaultCoverage reports the pair coverage observed against the live API, for use when
@@ -87,6 +95,13 @@ func mermaid(covered Coverage, backboneOnly bool) string {
 				nodeID(p.Key), p.Label, p.Example, strings.Join(p.Trains, " · "))
 			continue
 		}
+		if p.Optional {
+			// Say it on the node. A reader who sees NSX drawn like the rest will assume
+			// every stack has one.
+			fmt.Fprintf(&b, "    %s[\"<b>%s</b><br/><code>%s</code><br/><i>optional</i>\"]\n",
+				nodeID(p.Key), p.Label, p.Example)
+			continue
+		}
 		fmt.Fprintf(&b, "    %s[\"<b>%s</b><br/><code>%s</code>\"]\n",
 			nodeID(p.Key), p.Label, p.Example)
 	}
@@ -121,17 +136,26 @@ func mermaid(covered Coverage, backboneOnly bool) string {
 	b.WriteString("\n")
 	b.WriteString("    classDef base fill:#e8f0fe,stroke:#4a6fa5,stroke-width:3px,color:#12263f\n")
 	b.WriteString("    classDef k8s fill:#eaf6ec,stroke:#4a8a5c,stroke-width:3px,color:#12331c\n")
+	// Optional components get their own class and a dashed border, so "not every stack
+	// has this" survives being read at a glance.
+	b.WriteString("    classDef optional fill:#fdf4e7,stroke:#a5784a,stroke-width:3px,stroke-dasharray:5 4,color:#3f2c12\n")
 
-	var base, k8s []string
+	var base, k8s, optional []string
 	for _, p := range Products {
-		if p.Scheme == SchemeVSphere {
+		switch {
+		case p.Optional:
+			optional = append(optional, nodeID(p.Key))
+		case p.Scheme == SchemeVSphere:
 			base = append(base, nodeID(p.Key))
-		} else {
+		default:
 			k8s = append(k8s, nodeID(p.Key))
 		}
 	}
 	fmt.Fprintf(&b, "    class %s base\n", strings.Join(base, ","))
 	fmt.Fprintf(&b, "    class %s k8s\n", strings.Join(k8s, ","))
+	if len(optional) > 0 {
+		fmt.Fprintf(&b, "    class %s optional\n", strings.Join(optional, ","))
+	}
 
 	return b.String()
 }
@@ -145,6 +169,13 @@ func ASCII(covered Coverage) string {
 	b.WriteString("  │   8.0U3k     │   vCenter ≥ ESX     │   8.0U3k     │\n")
 	b.WriteString("  └──────┬───────┘                     └──────┬───────┘\n")
 	b.WriteString("         │ manages / delivers                 │ hosts run it\n")
+	b.WriteString("         ├─────────────────┬──────────────────┤\n")
+	b.WriteString("         ▼                 │                  ▼\n")
+	b.WriteString("  ╎ ─ ─ ─ ─ ─ ─ ╎          │           ╎ ─ ─ ─ ─ ─ ─ ╎\n")
+	b.WriteString("  ╎     NSX     ╎◄─────────┼──────────►╎     Avi     ╎   OPTIONAL: each is\n")
+	b.WriteString("  ╎ 9.1.0.0200  ╎ segments │           ╎   32.1.2    ╎   opted into on its\n")
+	b.WriteString("  ╎ ─ ─ ─ ─ ─ ─ ╎          │           ╎ ─ ─ ─ ─ ─ ─ ╎   own; Avi does NOT\n")
+	b.WriteString("         │ networking      │    load balancer │          require NSX\n")
 	b.WriteString("         └─────────────────┬──────────────────┘\n")
 	b.WriteString("                           ▼\n")
 	b.WriteString("                  ┌──────────────────┐\n")
@@ -216,10 +247,14 @@ func orderedLabels() []string {
 // what lands in docs/model.md and what `vkstack explain` prints.
 func Doc(covered Coverage) string {
 	var b strings.Builder
-	b.WriteString("# How vCenter, ESX, Supervisor, VKS and VKr fit together\n\n")
+	b.WriteString("# How vCenter, ESX, NSX, Avi, Supervisor, VKS and VKr fit together\n\n")
 	b.WriteString("The Broadcom interoperability matrix answers one question at a time:\n")
 	b.WriteString("\"is A compatible with B\". This is the shape of the whole dependency,\n")
 	b.WriteString("which is the part that usually has to be drawn on a whiteboard.\n\n")
+	b.WriteString("Five of these are in every stack. **NSX and Avi are optional and\n")
+	b.WriteString("independent**: a Supervisor runs on NSX networking, or on a vSphere\n")
+	b.WriteString("Distributed Switch with Avi in front of it, or on neither. Opt into each\n")
+	b.WriteString("on its own — asking for one never brings in the other.\n\n")
 	b.WriteString("```mermaid\n")
 	b.WriteString(Mermaid(covered))
 	b.WriteString("```\n\n")

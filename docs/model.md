@@ -1,13 +1,20 @@
-# How vCenter, ESX, Supervisor, VKS and VKr fit together
+# How vCenter, ESX, NSX, Avi, Supervisor, VKS and VKr fit together
 
 The Broadcom interoperability matrix answers one question at a time:
 "is A compatible with B". This is the shape of the whole dependency,
 which is the part that usually has to be drawn on a whiteboard.
 
+Five of these are in every stack. **NSX and Avi are optional and
+independent**: a Supervisor runs on NSX networking, or on a vSphere
+Distributed Switch with Avi in front of it, or on neither. Opt into each
+on its own — asking for one never brings in the other.
+
 ```mermaid
 flowchart TD
     VCENTER["<b>vCenter</b><br/><code>8.0U3k</code>"]
     ESX["<b>ESX</b><br/><code>8.0U3k</code>"]
+    NSX["<b>NSX</b><br/><code>9.1.0.0200</code><br/><i>optional</i>"]
+    AVI["<b>Avi</b><br/><code>32.1.2</code><br/><i>optional</i>"]
     SUPERVISOR["<b>Supervisor</b><br/><code>v1.32.9+vmware.2-fips-vsc9.1.0.0200</code><br/>two trains: vsc9 · vsc0"]
     VKS["<b>VKS</b><br/><code>3.7.0+v1.36</code>"]
     VKR["<b>VKr</b><br/><code>1.36.1</code>"]
@@ -20,11 +27,20 @@ flowchart TD
     VCENTER -.->|"published directly"| VKS
     VCENTER -.->|"published directly"| VKR
     SUPERVISOR -.->|"via VKS<br/><i>no published data</i>"| VKR
+    VCENTER -->|"compute manager"| NSX
+    ESX -->|"transport nodes"| NSX
+    NSX -->|"networking"| SUPERVISOR
+    VCENTER -->|"cloud connector"| AVI
+    NSX -->|"segments"| AVI
+    AVI -->|"load balancer"| SUPERVISOR
+    ESX -.->|"published directly"| AVI
 
     classDef base fill:#e8f0fe,stroke:#4a6fa5,stroke-width:3px,color:#12263f
     classDef k8s fill:#eaf6ec,stroke:#4a8a5c,stroke-width:3px,color:#12331c
+    classDef optional fill:#fdf4e7,stroke:#a5784a,stroke-width:3px,stroke-dasharray:5 4,color:#3f2c12
     class VCENTER,ESX base
     class SUPERVISOR,VKS,VKR k8s
+    class NSX,AVI optional
 ```
 
 ## What each relationship means
@@ -37,6 +53,13 @@ flowchart TD
 - **vCenter → VKS** *(published in the matrix)* — vCenter is the hub of the published matrix and has a direct compatibility edge to VKS, which is what makes it possible to solve a whole stack from a single pinned vCenter version. It is not a dependency, though: VKS runs on the Supervisor, so enforcing this pair would rule out combinations that work. It is looked up, never used to include or exclude.
 - **vCenter → VKr** *(published in the matrix)* — vCenter also has a direct published edge to VKr, giving a second independent reference point. Like the VKS pair it is not a dependency — VKr is provisioned by VKS — so it informs rather than constrains.
 - **Supervisor → VKr** *(inferred — upstream publishes nothing for this pair)* — There is no published Supervisor-to-VKr data upstream. The relationship is real but has to be inferred through VKS and vCenter, so this tool reports it as inferred rather than verified.
+- **vCenter → NSX** *(published in the matrix)* — NSX is optional — plenty of vSphere runs without it — but where it is deployed the NSX manager registers vCenter as a compute manager, and that pairing is versioned. Upstream publishes this pair directly.
+- **ESX → NSX** *(published in the matrix)* — NSX prepares the ESX hosts as transport nodes and installs its data plane on them, so the host version gates which NSX versions can be deployed.
+- **NSX → Supervisor** *(published in the matrix)* — A Supervisor can be enabled on NSX networking or on a vSphere Distributed Switch. On NSX, the NSX version gates which Supervisor versions can be enabled, and upstream publishes the pair. A Supervisor on VDS has no NSX in the picture at all, which is why NSX is optional rather than part of every stack.
+- **vCenter → Avi** *(published in the matrix)* — Avi Load Balancer — the product formerly sold as NSX Advanced Load Balancer — talks to vCenter through its vSphere cloud connector to place service engines, so the controller version is paired with vCenter. Upstream publishes this pair directly.
+- **NSX → Avi** *(published in the matrix)* — Where NSX and Avi are deployed together the Avi service engines attach to NSX segments, and the two versions are paired. This constrains a stack only when both are chosen: Avi on a vSphere Distributed Switch with no NSX anywhere is an ordinary deployment, and Avi never requires NSX.
+- **Avi → Supervisor** *(published in the matrix)* — A Supervisor on VDS networking needs an external load balancer, and Avi is the supported choice. The pair is published, so where Avi is deployed it gates which Supervisor versions can be enabled. A Supervisor on NSX uses NSX load balancing instead and has no Avi in the picture.
+- **ESX → Avi** *(published in the matrix)* — Upstream publishes an ESX-to-Avi pair, but it is almost entirely empty: at the time of writing three cells in the whole grid say yes, all of them Avi 32.1.1 against ESX 9.1.x. Enforcing it would collapse every Avi-bearing stack to that one combination and rule out deployments that plainly work. Avi service engines are placed through vCenter, so vCenter is the pair that decides. This one is looked up and reported, never used to include or exclude.
 
 ## Reading the versions
 
@@ -48,6 +71,8 @@ flowchart TD
 - Supervisor is additionally split by release train (vsc9 and vsc0), because the same Kubernetes version on the two trains is not the same thing.
 - vCenter is never grouped. Its patch letter changes what it supports: 8.0U3 takes Supervisor 1.26–1.28, while 8.0U3k takes 1.31–1.33.
 - ESX is not shown as a layer. Its release lines mirror vCenter's and it has no published data against VKS or VKr, so it appears as the hosts each vCenter runs on.
+- NSX and Avi are grouped by their major.minor line — NSX 9.1 covers 9.1.0.0 through 9.1.0.0200, Avi 32.1 covers 32.1.1 and 32.1.2.
+- NSX and Avi are optional layers and start collapsed. Expanding or pinning one has no effect on the other: they are separate choices, and Avi does not require NSX.
 
 ## What this tool does not know
 
@@ -70,6 +95,38 @@ The interoperability matrix returns nothing at all for ESX against VKr — not a
 
 *What to do:* Constrain through vCenter and Supervisor instead, which are published.
 
+### NSX × VKS is not published
+
+The interoperability matrix returns nothing at all for NSX against VKS — not an empty result, but no data. Nobody has stated whether these two work together.
+
+*What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
+
+*What to do:* Constrain through vCenter and Supervisor instead, which are published.
+
+### NSX × VKr is not published
+
+The interoperability matrix returns nothing at all for NSX against VKr — not an empty result, but no data. Nobody has stated whether these two work together.
+
+*What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
+
+*What to do:* Constrain through vCenter and Supervisor instead, which are published.
+
+### Avi × VKS is not published
+
+The interoperability matrix returns nothing at all for Avi against VKS — not an empty result, but no data. Nobody has stated whether these two work together.
+
+*What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
+
+*What to do:* Constrain through vCenter and Supervisor instead, which are published.
+
+### Avi × VKr is not published
+
+The interoperability matrix returns nothing at all for Avi against VKr — not an empty result, but no data. Nobody has stated whether these two work together.
+
+*What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
+
+*What to do:* Constrain through vCenter and Supervisor instead, which are published.
+
 ### Supervisor × VKr is not published
 
 The interoperability matrix returns nothing at all for Supervisor against VKr — not an empty result, but no data. Nobody has stated whether these two work together.
@@ -77,6 +134,22 @@ The interoperability matrix returns nothing at all for Supervisor against VKr �
 *What it means:* This is the gap that matters. It is a question people genuinely ask, and there is no direct answer to look up.
 
 *What to do:* This tool answers it indirectly: VKS sits between them and is published against both, and vCenter is published against both, so a combination that satisfies those is reported — always labelled inferred, never as verified compatible.
+
+### Which optional components a deployment actually has
+
+NSX and Avi are each present in some deployments and absent from others, and nothing upstream says which. A Supervisor can run on NSX networking or on a vSphere Distributed Switch with Avi in front of it, or on neither.
+
+*What it means:* A solved stack leaves NSX and Avi out unless you ask for them, so an answer that does not mention NSX is not a claim that you have no NSX — it is a claim about the five components that are always there.
+
+*What to do:* Pin a version (`--nsx 9.1.0.0200`) or opt in by name (`--with nsx`, `--with avi`, `--with nsx,avi`). The two are independent: asking for one never pulls in the other.
+
+### Whether Avi and ESX versions really are that restricted
+
+Upstream publishes an ESX × Avi pair, but almost every cell in it is empty — at the time of writing three say yes, all of them Avi 32.1.1 against ESX 9.1.x. Avi is not deployed onto hosts directly; its service engines are placed through vCenter.
+
+*What it means:* This tool reports the pair but never enforces it. Enforcing it would rule out Avi deployments that plainly work, so a stack can be called valid even though the ESX × Avi cell is blank.
+
+*What to do:* `vkstack compat avi <version>` shows the pair as it is published, blanks and all.
 
 ### Whether an upgrade is actually safe to perform
 
@@ -112,7 +185,7 @@ vCenter and ESX below 8.0 U3 are filtered out, and Supervisor, VKS and VKr are d
 
 ## Upgrade order
 
-vCenter → ESX → Supervisor → VKS → VKr
+vCenter → ESX → NSX → Avi → Supervisor → VKS → VKr
 
 vCenter moves first because it must be at or ahead of the hosts and the
 Supervisor it manages; the guest clusters move last. This ordering is

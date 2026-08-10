@@ -179,7 +179,17 @@ func newProductsCmd() *cobra.Command {
 			}
 			tw.Flush()
 
-			fmt.Fprintln(out, "\nPair coverage — three pairs have no upstream data at all:")
+			// Counted rather than stated: the number moves whenever a product is added
+			// or upstream starts publishing a pair, and a stale count here would be the
+			// tool misreporting its own data.
+			unpublished := 0
+			for _, pr := range model.Pairs() {
+				if !gr.Published(pr[0], pr[1]) {
+					unpublished++
+				}
+			}
+			fmt.Fprintf(out, "\nPair coverage — %d of %d pairs have no upstream data at all:\n",
+				unpublished, len(model.Pairs()))
 			tw = tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "PAIR\tPUBLISHED")
 			for _, pr := range model.Pairs() {
@@ -279,6 +289,49 @@ func pinFlags(cmd *cobra.Command) map[string]*string {
 		vals[p.Key] = v
 	}
 	return vals
+}
+
+// optionalKeys names the products `--with` accepts, in model order.
+func optionalKeys() []string {
+	var out []string
+	for _, p := range model.Products {
+		if p.Optional {
+			out = append(out, p.Key)
+		}
+	}
+	return out
+}
+
+// resolveInclude validates the `--with` values and returns them de-duplicated.
+//
+// Naming a required product is rejected rather than ignored: `--with vcenter` means the
+// caller has the wrong model in mind, and silently accepting it would let them believe
+// vCenter had been optional all along.
+func resolveInclude(with []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, raw := range with {
+		key := strings.ToLower(strings.TrimSpace(raw))
+		if key == "" {
+			continue
+		}
+		p, ok := model.ByKey(key)
+		switch {
+		case !ok:
+			return nil, codedErr("unknown_product", ExitUsage,
+				"unknown product %q in --with; optional products are %s",
+				raw, strings.Join(optionalKeys(), ", "))
+		case !p.Optional:
+			return nil, codedErr("not_optional", ExitUsage,
+				"%s is always part of a stack and cannot be passed to --with; optional products are %s",
+				p.Label, strings.Join(optionalKeys(), ", "))
+		}
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	return out, nil
 }
 
 func resolvePins(gr *graph.Graph, vals map[string]*string) (map[int]*graph.Release, error) {
@@ -393,17 +446,26 @@ func newStackCmd() *cobra.Command {
 	var limit int
 	var patches bool
 	var list bool
+	var with []string
 
 	cmd := &cobra.Command{
 		Use:   "stack [<product> <version>]",
 		Short: "Solve a whole valid stack from one or more pinned versions",
-		Long: `Solve for complete, valid stacks across all five products.
+		Long: `Solve for complete, valid stacks across the five core products.
 
 Pin as little as one version and the rest is filled in with the newest combination that
 is compatible on every published pair:
 
   vkstack stack vcenter 8.0U3k
   vkstack stack --vcenter 8.0U3k --vks 3.6.2
+
+NSX and Avi are optional and independent. Neither is in a stack unless you pin it or ask
+for it, and asking for one never brings in the other:
+
+  vkstack stack vcenter 9.1.0.0300 --with nsx        # NSX, no Avi
+  vkstack stack vcenter 9.1.0.0300 --with avi        # Avi on VDS, no NSX
+  vkstack stack vcenter 9.1.0.0300 --with nsx,avi    # both
+  vkstack stack --avi 32.1.2                         # a pin is its own opt-in
 
 Pairs upstream does not publish cannot constrain the answer; they are reported at the
 bottom so you know which parts of the stack are verified and which are inferred.`,
@@ -413,6 +475,8 @@ bottom so you know which parts of the stack are verified and which are inferred.
 	cmd.Flags().IntVar(&limit, "limit", 5, "with --list, maximum number of stacks to return")
 	cmd.Flags().BoolVar(&patches, "patches", false, "allow patch releases in the solution")
 	cmd.Flags().BoolVar(&list, "list", false, "list whole stack combinations instead of the recommendation plus alternatives")
+	cmd.Flags().StringSliceVar(&with, "with", nil,
+		"optional products to include in the stack ("+strings.Join(optionalKeys(), ", ")+"); repeatable or comma-separated")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		gr, err := loadGraph()
@@ -435,7 +499,12 @@ bottom so you know which parts of the stack are verified and which are inferred.
 			return fmt.Errorf("pin at least one version, e.g. `vkstack stack vcenter 8.0U3k`")
 		}
 
-		opts := graph.StackOptions{Limit: limit, IncludePatches: patches}
+		include, err := resolveInclude(with)
+		if err != nil {
+			return err
+		}
+
+		opts := graph.StackOptions{Limit: limit, IncludePatches: patches, Include: include}
 		if g.mode == OutputCSV {
 			return csvUnavailable("stack")
 		}
@@ -480,9 +549,9 @@ bottom so you know which parts of the stack are verified and which are inferred.
 
 		options := gr.ViableOptions(pins, opts)
 		if g.jsonOut {
-			return emit(cmd, "stack", 1, buildRecommendationJSON(stacks[0], options))
+			return emit(cmd, "stack", 1, buildRecommendationJSON(gr, stacks[0], options))
 		}
-		printRecommendation(cmd.OutOrStdout(), stacks[0], options)
+		printRecommendation(cmd.OutOrStdout(), gr, stacks[0], options)
 		return nil
 	}
 	return cmd
@@ -490,7 +559,7 @@ bottom so you know which parts of the stack are verified and which are inferred.
 
 // printRecommendation shows the newest valid stack, then every alternative each product
 // could take while still forming a valid stack.
-func printRecommendation(w io.Writer, best graph.Stack, options map[int][]*graph.Release) {
+func printRecommendation(w io.Writer, gr *graph.Graph, best graph.Stack, options map[int][]*graph.Release) {
 	fmt.Fprintln(w, "Recommended stack (newest valid combination):")
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, p := range model.Products {
@@ -511,8 +580,16 @@ func printRecommendation(w io.Writer, best graph.Stack, options map[int][]*graph
 	const shown = 5
 	fmt.Fprintln(w, "\nAlso valid, holding everything else compatible:")
 	tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	var absent []model.Product
 	for _, p := range model.Products {
 		if best.Pinned[p.ID] {
+			continue
+		}
+		// An optional product the stack does not contain has no alternatives to list —
+		// it has no place in the stack at all. Showing it here as "(no alternative)"
+		// read as "there is no NSX that works", which is the opposite of the truth.
+		if _, inStack := best.Releases[p.ID]; p.Optional && !inStack {
+			absent = append(absent, p)
 			continue
 		}
 		alts := options[p.ID]
@@ -531,7 +608,44 @@ func printRecommendation(w io.Writer, best graph.Stack, options map[int][]*graph
 		fmt.Fprintf(tw, "  %s\t%s\n", p.Label, line)
 	}
 	tw.Flush()
+
+	// Say plainly that the optional components were left out, and how to ask for them.
+	// Silence here reads as "this stack has no NSX", which is a claim the tool cannot
+	// make — it only knows the five components every deployment has.
+	if len(absent) > 0 {
+		var names, flags []string
+		for _, p := range absent {
+			names = append(names, p.Label)
+			flags = append(flags, "--with "+p.Key)
+		}
+		note := "optional"
+		if len(absent) > 1 {
+			note = "optional, and independent of each other"
+		}
+		fmt.Fprintf(w, "\nNot in this stack: %s — %s. Add with %s.\n",
+			strings.Join(names, " and "), note, strings.Join(flags, " or "))
+	}
+
 	fmt.Fprintln(w, "\n  (--json lists every option; --list shows whole combinations)")
+
+	// Pairs upstream publishes that this tool does not enforce. `check` has always shown
+	// these; `stack` did not, so it could hand back a stack containing an ESX and an Avi
+	// upstream marks NOT SUPPORTED without a word. The pair is genuinely not a dependency
+	// and must not invalidate the stack — but staying silent about it is a different
+	// thing from not enforcing it.
+	if bad := notableInformational(gr.Check(best.Releases)); len(bad) > 0 {
+		fmt.Fprintln(w, "\nPublished as not compatible, but not enforced (these are not dependencies):")
+		tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		for _, v := range bad {
+			a, b := model.OrderPair(v.A, v.B)
+			ra, rb := v.ARelease, v.BRelease
+			if a.ID != v.A.ID {
+				ra, rb = rb, ra
+			}
+			fmt.Fprintf(tw, "  %s %s × %s %s\t%s\n", a.Label, ra.Raw, b.Label, rb.Raw, statusWord(v.Status))
+		}
+		tw.Flush()
+	}
 
 	if inferred := best.Inferred(); len(inferred) > 0 {
 		var names []string
@@ -544,15 +658,48 @@ func printRecommendation(w io.Writer, best graph.Stack, options map[int][]*graph
 	}
 }
 
+// notableInformational returns the published non-dependency pairs worth interrupting for:
+// the ones upstream does not call compatible. The compatible ones are the normal case and
+// listing them all would bury this.
+func notableInformational(res graph.CheckResult) []graph.PairVerdict {
+	var out []graph.PairVerdict
+	for _, v := range res.Informational() {
+		if !graph.Compatible(v.Status) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // recommendationJSON is the machine-readable form of the default output.
 type recommendationJSON struct {
 	Recommended map[string]string   `json:"recommended"`
 	Pinned      []string            `json:"pinned"`
 	Options     map[string][]string `json:"options"`
 	Inferred    []string            `json:"inferred"`
+	// Omitted names the optional products this stack does not contain, so a caller never
+	// has to read absence from `recommended` and guess what it means. Their entries in
+	// `options` still list what could join if they were asked for.
+	//
+	// Absence is not a claim that the deployment lacks them: they were not asked for.
+	Omitted []string `json:"omitted"`
+	// NotEnforced are published pairs in this stack that are not dependencies and that
+	// upstream does not call compatible. They do not invalidate the stack — `check`
+	// reports them the same way — but a caller that never sees them can hand on a stack
+	// containing a pair upstream marks NOT SUPPORTED.
+	NotEnforced []notEnforcedJSON `json:"notEnforced,omitempty"`
 }
 
-func buildRecommendationJSON(best graph.Stack, options map[int][]*graph.Release) recommendationJSON {
+type notEnforcedJSON struct {
+	A          string `json:"a"`
+	AVersion   string `json:"aVersion"`
+	B          string `json:"b"`
+	BVersion   string `json:"bVersion"`
+	Status     int    `json:"status"`
+	StatusText string `json:"statusText"`
+}
+
+func buildRecommendationJSON(gr *graph.Graph, best graph.Stack, options map[int][]*graph.Release) recommendationJSON {
 	out := recommendationJSON{
 		Recommended: map[string]string{},
 		Options:     map[string][]string{},
@@ -560,6 +707,8 @@ func buildRecommendationJSON(best graph.Stack, options map[int][]*graph.Release)
 	for _, p := range model.Products {
 		if r := best.Releases[p.ID]; r != nil {
 			out.Recommended[p.Key] = r.Raw
+		} else if p.Optional {
+			out.Omitted = append(out.Omitted, p.Key)
 		}
 		if best.Pinned[p.ID] {
 			out.Pinned = append(out.Pinned, p.Key)
@@ -571,14 +720,38 @@ func buildRecommendationJSON(best graph.Stack, options map[int][]*graph.Release)
 	for _, v := range best.Inferred() {
 		out.Inferred = append(out.Inferred, v.A.Key+"×"+v.B.Key)
 	}
+	for _, v := range notableInformational(gr.Check(best.Releases)) {
+		a, b := model.OrderPair(v.A, v.B)
+		ra, rb := v.ARelease, v.BRelease
+		if a.ID != v.A.ID {
+			ra, rb = rb, ra
+		}
+		out.NotEnforced = append(out.NotEnforced, notEnforcedJSON{
+			A: a.Key, AVersion: ra.Raw, B: b.Key, BVersion: rb.Raw,
+			Status: v.Status, StatusText: statusWord(v.Status),
+		})
+	}
 	return out
 }
 
 func printStacks(w io.Writer, stacks []graph.Stack) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
-	header := []string{"#"}
+	// An optional product no stack contains gets no column at all. A "-" in a row of
+	// version strings reads as "nothing compatible", which is the same false negative
+	// the recommendation output was fixed to avoid.
+	var columns []model.Product
+	var absent []model.Product
 	for _, p := range model.Products {
+		if p.Optional && stacks[0].Releases[p.ID] == nil {
+			absent = append(absent, p)
+			continue
+		}
+		columns = append(columns, p)
+	}
+
+	header := []string{"#"}
+	for _, p := range columns {
 		label := p.Label
 		if stacks[0].Pinned[p.ID] {
 			label += "*"
@@ -589,7 +762,7 @@ func printStacks(w io.Writer, stacks []graph.Stack) {
 
 	for i, s := range stacks {
 		row := []string{fmt.Sprint(i + 1)}
-		for _, p := range model.Products {
+		for _, p := range columns {
 			if r := s.Releases[p.ID]; r != nil {
 				row = append(row, r.Raw)
 			} else {
@@ -601,6 +774,19 @@ func printStacks(w io.Writer, stacks []graph.Stack) {
 	tw.Flush()
 
 	fmt.Fprintln(w, "\n* pinned")
+	if len(absent) > 0 {
+		var names, flags []string
+		for _, p := range absent {
+			names = append(names, p.Label)
+			flags = append(flags, "--with "+p.Key)
+		}
+		note := "optional"
+		if len(absent) > 1 {
+			note = "optional, and independent of each other"
+		}
+		fmt.Fprintf(w, "Not in these stacks: %s — %s. Add with %s.\n",
+			strings.Join(names, " and "), note, strings.Join(flags, " or "))
+	}
 	if inferred := stacks[0].Inferred(); len(inferred) > 0 {
 		var names []string
 		for _, v := range inferred {
@@ -617,6 +803,10 @@ type stackJSON struct {
 	Releases map[string]string `json:"releases"`
 	Pinned   []string          `json:"pinned"`
 	Inferred []string          `json:"inferred"`
+	// Omitted names the optional products this stack does not contain, for the same
+	// reason recommendationJSON carries it: absence in `releases` must not be read as a
+	// claim that nothing works.
+	Omitted []string `json:"omitted"`
 }
 
 func stacksToJSON(stacks []graph.Stack) []stackJSON {
@@ -626,6 +816,8 @@ func stacksToJSON(stacks []graph.Stack) []stackJSON {
 		for _, p := range model.Products {
 			if r := s.Releases[p.ID]; r != nil {
 				j.Releases[p.Key] = r.Raw
+			} else if p.Optional {
+				j.Omitted = append(j.Omitted, p.Key)
 			}
 			if s.Pinned[p.ID] {
 				j.Pinned = append(j.Pinned, p.Key)
@@ -661,6 +853,9 @@ func productsJSON(gr *graph.Graph) []map[string]any {
 			"releases":     len(gr.ReleasesOf(p.ID)),
 			"upgradeOrder": p.UpgradeOrder,
 			"versionFloor": floor,
+			// Optional products are absent from a solved stack unless pinned or passed
+			// to `--with`. This is how a caller discovers what `--with` accepts.
+			"optional": p.Optional,
 		}
 		if floor == "" {
 			// No hardcoded floor: these products are filtered by reachability, so

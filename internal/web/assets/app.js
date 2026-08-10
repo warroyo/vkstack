@@ -15,6 +15,7 @@ const state = {
   baseCounts: {},     // layer key -> total node count, for the narrowing readout
   meta: null,         // the cache snapshot this page is reading, for the manifest
   filter: "",         // free-text narrowing of the version lists
+  view: "stack",      // which tab is showing
 };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -726,7 +727,7 @@ function setPin(pin, { push = true } = {}) {
 // The keys are the ones the API already speaks (product, version), so the address bar and
 // /api/stackmap read the same. Defaults are omitted: a bare URL means the default view.
 
-const URL_DEFAULTS = { legacy: true };
+const URL_DEFAULTS = { legacy: true, view: "stack" };
 
 function currentURL() {
   const params = new URLSearchParams();
@@ -735,6 +736,7 @@ function currentURL() {
     params.set("version", state.pin.version);
   }
   if (state.hideLegacy !== URL_DEFAULTS.legacy) params.set("legacy", "1");
+  if (state.view !== URL_DEFAULTS.view) params.set("view", state.view);
   const query = params.toString();
   return location.pathname + (query ? "?" + query : "");
 }
@@ -752,7 +754,7 @@ function syncURL(push) {
 }
 
 function readState() {
-  return { pin: state.pin, hideLegacy: state.hideLegacy };
+  return { pin: state.pin, hideLegacy: state.hideLegacy, view: state.view };
 }
 
 // applyURL seeds the app from the address bar. Returns whether the URL asked for
@@ -764,12 +766,14 @@ function applyURL() {
   state.hideLegacy = params.get("legacy") !== "1";
   state.pin = product && version ? { product, version } : null;
   $("#hide-legacy").checked = state.hideLegacy;
-  return params.has("product") || params.has("legacy");
+  state.view = params.get("view") === "usage" ? "usage" : "stack";
+  return params.has("product") || params.has("legacy") || params.has("view");
 }
 
 window.addEventListener("popstate", () => {
   restoring = true;
   applyURL();
+  showView(state.view);
   loadStack().finally(() => { restoring = false; });
 });
 
@@ -1213,6 +1217,38 @@ function hidePeek(force = false) {
   peek.classList.remove("is-locked");
 }
 
+// --- tabs -------------------------------------------------------------------
+
+function showView(name) {
+  state.view = name;
+  for (const v of ["stack", "usage"]) {
+    $(`#view-${v}`).classList.toggle("hidden", v !== name);
+  }
+  for (const btn of document.querySelectorAll("#tabs button")) {
+    btn.classList.toggle("active", btn.dataset.view === name);
+  }
+  // The tab is a personal habit rather than part of the view being pointed at, so it is
+  // remembered here and only reaches a link when it is not the default.
+  localStorage.setItem("vkstack.view", name);
+}
+
+for (const btn of document.querySelectorAll("#tabs button")) {
+  btn.addEventListener("click", () => {
+    showView(btn.dataset.view);
+    syncURL(false);
+  });
+}
+
+// The usage snippets are meant to be pasted into a config file, so they get a button
+// rather than a selection. Same clipboard path as "Copy link", fallback included: the
+// Clipboard API is unavailable on a shared instance served over plain http.
+for (const btn of document.querySelectorAll("[data-copy]")) {
+  btn.addEventListener("click", () => {
+    const source = document.getElementById(btn.dataset.copy);
+    if (source) copyText(source.textContent, btn, "Copied");
+  });
+}
+
 // --- boot -------------------------------------------------------------------
 
 // MY_STACK holds what this browser actually runs, if its owner said so. It is a personal
@@ -1250,6 +1286,7 @@ async function boot() {
   // this browser's own stack, if one was saved. Only failing both does the map fall back
   // to the newest base version, so an arrival is never an empty frame.
   const fromURL = applyURL();
+  showView(fromURL ? state.view : (localStorage.getItem("vkstack.view") || "stack"));
   if (!state.pin && !fromURL) state.pin = myStack();
 
   await loadStack();

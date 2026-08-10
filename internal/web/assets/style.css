@@ -108,7 +108,37 @@ body {
 .disclaimer a { color: inherit; text-decoration-color: var(--hair); }
 .disclaimer a:hover { color: var(--ink); text-decoration-color: currentColor; }
 
+#tabs { display: flex; gap: 1.1rem; }
+
+#tabs button {
+  background: none;
+  border: 0;
+  padding: 0.15rem 0;
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+#tabs button:hover { color: var(--ink); }
+#tabs button.active { color: var(--ink); border-bottom-color: var(--signal); }
+
+/* Pushed to the end of the masthead row: the way out of the page belongs at its edge,
+   not in the reading order of the tabs. */
+.gh-link {
+  margin-left: auto;
+  display: inline-flex;
+  align-self: center;
+  color: var(--faint);
+}
+
+.gh-link:hover { color: var(--ink); }
+.gh-link:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
+
 main { padding: 1.5rem; max-width: 1240px; }
+
+.view.hidden { display: none; }
 
 .lede { margin: 0; color: var(--muted); max-width: 60ch; }
 h2 { font-size: 0.9rem; margin: 1.6rem 0 0.6rem; }
@@ -369,8 +399,11 @@ button.ghost.inline { margin-left: 0.6rem; }
 
 /* Printing is the cheapest export there is: a change board wants a page, not a browser. */
 @media print {
-  .masthead nav, .stack-actions, .manifest-actions, .legend,
-  #strata, #peek, .refresh-log, .section-head .filter { display: none !important; }
+  .masthead nav, .gh-link, .stack-actions, .manifest-actions, .legend,
+  #strata, #peek, #view-usage, .refresh-log,
+  .section-head .filter { display: none !important; }
+  /* Printing is for the record, so it prints the record whichever tab is open. */
+  #view-stack.hidden { display: block !important; }
   .recommended { border: 1px solid #999; break-inside: avoid; }
   body { color: #000; background: #fff; }
   .map-svg { max-width: 100%; }
@@ -456,6 +489,74 @@ button.ghost.inline { margin-left: 0.6rem; }
   .layer { grid-template-columns: 1fr; gap: 0.5rem; }
   main { padding: 1rem; }
 }
+
+/* ---- usage -------------------------------------------------------------- */
+
+.usage-note {
+  margin: 0.6rem 0 0;
+  max-width: 74ch;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.usage-note code, .usage-commands code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  color: var(--ink);
+}
+
+/* The snippet is the point of the tab, so the button sits on it rather than beside it —
+   close enough that the thing being copied is never ambiguous. */
+.snippet {
+  position: relative;
+  margin-top: 0.7rem;
+  max-width: 74ch;
+}
+
+.snippet pre {
+  margin: 0;
+  padding: 0.75rem 5rem 0.75rem 0.9rem;
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.snippet .copy {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+}
+
+.usage-commands {
+  margin: 0.6rem 0 0;
+  max-width: 78ch;
+  font-size: 0.86rem;
+}
+
+.usage-commands dt {
+  margin-top: 0.7rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.usage-commands dd { margin: 0.15rem 0 0; color: var(--muted); }
+
+.usage-out {
+  margin-top: 1.8rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--hair);
+  font-size: 0.82rem;
+  color: var(--faint);
+}
+
+.usage-out a { color: var(--muted); }
+.usage-out a:hover { color: var(--ink); }
 
 /* ---- the map ----------------------------------------------------------- */
 

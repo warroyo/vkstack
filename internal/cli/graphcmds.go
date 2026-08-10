@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -28,7 +29,7 @@ func loadGraph() (*graph.Graph, error) {
 		return nil, err
 	}
 	rememberSnapshot(db)
-	return loadGraphFrom(db)
+	return loadGraphFrom(db, g.generation)
 }
 
 // rememberSnapshot records which cache an answer came from, so every JSON envelope can
@@ -51,7 +52,12 @@ func rememberSnapshot(db *store.DB) {
 
 // loadGraphFrom builds the graph from an already-open cache. `serve` holds one handle for
 // its lifetime rather than opening and migrating the database on every request.
-func loadGraphFrom(db *store.DB) (*graph.Graph, error) {
+// loadGraphFrom builds the graph for one generation.
+//
+// The generation is a parameter rather than a global because the long-lived callers — the
+// MCP server and the web server — take it per request, where the flag is only the CLI's
+// default. Zero means every generation.
+func loadGraphFrom(db *store.DB, generation int) (*graph.Graph, error) {
 	snap, err := db.Load()
 	if err != nil {
 		return nil, err
@@ -60,6 +66,7 @@ func loadGraphFrom(db *store.DB) (*graph.Graph, error) {
 	if err != nil {
 		return nil, err
 	}
+	opts.Generation = generation
 	return graph.Load(snap, opts)
 }
 
@@ -73,7 +80,26 @@ func graphOptions() (graph.Options, error) {
 		}
 		mins[strings.TrimSpace(key)] = strings.TrimSpace(val)
 	}
-	return graph.Options{AllVersions: g.allVersions, MinVersions: mins}, nil
+	// A generation the model does not know is rejected rather than ignored: on the CLI a
+	// typo should say so, where a stale query string on the web should still render.
+	if !model.KnownGeneration(g.generation) {
+		return graph.Options{}, fmt.Errorf("--generation wants one of %s, got %d",
+			generationList(), g.generation)
+	}
+	return graph.Options{
+		AllVersions: g.allVersions,
+		MinVersions: mins,
+		Generation:  g.generation,
+	}, nil
+}
+
+// generationList renders the known generations for an error message.
+func generationList() string {
+	out := make([]string, 0, len(model.Generations))
+	for _, gen := range model.Generations {
+		out = append(out, strconv.Itoa(gen))
+	}
+	return strings.Join(out, ", ")
 }
 
 // statusWord renders a status code the way the interop matrix labels it.

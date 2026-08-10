@@ -367,6 +367,15 @@ Avi lines without inventing a cutoff. `--all-versions` disables the floor and
 `--min-version vcenter=9.0.0.0` moves it. The floor is applied when the cache is read, not
 when it is written, so changing it never needs a refetch.
 
+`--generation 9` narrows to one vSphere platform generation, and the web UI offers the
+same choice as a tab. A generation names a **vCenter major version and constrains nothing
+else**. That is not a simplification: every other component crosses the line in the
+published data. ESX 8.x pairs with vCenter 9 in the hundreds of rows, NSX 4.x has more
+compatible vCenter 9 pairs than NSX 9.x does, the Supervisor's `vsc0` train serves both,
+and Avi 31.x spans them. So a generation filters vCenter, and everything else is kept or
+dropped by whether it can still reach a surviving vCenter — which means a component that
+genuinely works with both appears under both, because it does.
+
 ## Layout
 
 ```

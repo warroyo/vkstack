@@ -28,7 +28,7 @@ const (
 
 // testGraph builds a minimal but realistic graph, including version strings that contain
 // the characters mermaid treats as syntax.
-func testGraph(t *testing.T) *graph.Graph {
+func testSnapshot(t *testing.T) *store.Snapshot {
 	t.Helper()
 	snap := &store.Snapshot{FetchedAt: 1_700_000_000_000}
 	add := func(id, product int, hybrid string) {
@@ -126,11 +126,37 @@ func testGraph(t *testing.T) *graph.Graph {
 	ok(63, 72)
 	ok(21, 73) // vCenter only — no Supervisor will take it
 
-	g, err := graph.Load(snap, graph.Options{})
+	return snap
+}
+
+func testGraph(t *testing.T) *graph.Graph {
+	t.Helper()
+	return loadTestGraph(t, graph.Options{})
+}
+
+func loadTestGraph(t *testing.T, opts graph.Options) *graph.Graph {
+	t.Helper()
+	g, err := graph.Load(testSnapshot(t), opts)
 	if err != nil {
 		t.Fatalf("loading test graph: %v", err)
 	}
 	return g
+}
+
+// generationServer wires a loader that really re-loads per generation, so a handler test
+// exercises the same path a running server takes rather than a graph pinned in advance.
+func generationServer(t *testing.T) http.Handler {
+	t.Helper()
+	h, err := NewServer(Config{
+		Load: func(gen int) (*graph.Graph, error) {
+			return loadTestGraph(t, graph.Options{Generation: gen}), nil
+		},
+		Refresh: func(func(int, int, string)) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	return h
 }
 
 func testServer(t *testing.T) http.Handler {
@@ -143,7 +169,7 @@ func testServer(t *testing.T) http.Handler {
 func serverForGraph(t *testing.T, g *graph.Graph) http.Handler {
 	t.Helper()
 	h, err := NewServer(Config{
-		Load:    func() (*graph.Graph, error) { return g, nil },
+		Load:    func(int) (*graph.Graph, error) { return g, nil },
 		Refresh: func(func(int, int, string)) error { return nil },
 	})
 	if err != nil {
@@ -157,7 +183,7 @@ func serverForGraph(t *testing.T, g *graph.Graph) http.Handler {
 func serverWith(t *testing.T, cfg Config) http.Handler {
 	t.Helper()
 	g := testGraph(t)
-	cfg.Load = func() (*graph.Graph, error) { return g, nil }
+	cfg.Load = func(int) (*graph.Graph, error) { return g, nil }
 	h, err := NewServer(cfg)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -378,7 +404,7 @@ func TestHealthReflectsCacheState(t *testing.T) {
 		t.Errorf("expected 200 with a populated cache, got %d", rec.Code)
 	}
 
-	empty, err := NewServer(Config{Load: func() (*graph.Graph, error) { return &graph.Graph{}, nil }})
+	empty, err := NewServer(Config{Load: func(int) (*graph.Graph, error) { return &graph.Graph{}, nil }})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

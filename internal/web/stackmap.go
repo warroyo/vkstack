@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/warroyo/vkstack/internal/graph"
@@ -126,7 +127,7 @@ func lineKey(p model.Product, r *graph.Release) string {
 	case "vks":
 		// VKS's own minor line, e.g. "3.6" from "3.6.3+1.35".
 		if len(r.Version.Key) > 0 && len(r.Version.Key[0]) >= 2 {
-			return fmt.Sprintf("%d.%d", r.Version.Key[0][0], r.Version.Key[0][1])
+			return fmt.Sprintf("%d.%d", r.Version.Major(), r.Version.Key[0][1])
 		}
 	case "nsx", "avi":
 		// Neither tracks a Kubernetes minor, so the default branch would fall through to
@@ -134,7 +135,7 @@ func lineKey(p model.Product, r *graph.Release) string {
 		// major.minor line instead: NSX "9.1" covers 9.1.0.0 to 9.1.0.0200, Avi "32.1"
 		// covers 32.1.1 and 32.1.2.
 		if len(r.Version.Key) > 0 && len(r.Version.Key[0]) >= 2 {
-			return fmt.Sprintf("%d.%d", r.Version.Key[0][0], r.Version.Key[0][1])
+			return fmt.Sprintf("%d.%d", r.Version.Major(), r.Version.Key[0][1])
 		}
 	case "supervisor":
 		// Kubernetes minor *and* train: the two trains are not interchangeable.
@@ -261,10 +262,23 @@ func optionalFromQuery(raw string) []string {
 	return out
 }
 
+// generationFromQuery parses the `gen` parameter into a vCenter major version.
+//
+// An unknown or unparsable value falls back to every generation rather than erroring, for
+// the same reason optionalFromQuery drops unknown keys: this comes from a query string,
+// and a stale bookmark should show a map rather than an error page.
+func generationFromQuery(raw string) int {
+	gen, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || !model.KnownGeneration(gen) {
+		return 0
+	}
+	return gen
+}
+
 // handleStackMap returns every layer bottom-up, plus — when something is pinned — the set
 // of node ids that can appear in a complete valid stack alongside it.
 func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
-	g, err := s.cfg.Load()
+	g, err := s.cfg.Load(generationFromQuery(r.URL.Query().Get("gen")))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return

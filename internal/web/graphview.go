@@ -15,12 +15,12 @@ import (
 // nodes, so a layout engine buys little, and reusing one renderer keeps the data graph
 // visually consistent with the conceptual whiteboard.
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
-	g, err := s.cfg.Load()
+	q := r.URL.Query()
+	g, err := s.cfg.Load(generationFromQuery(q.Get("gen")))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	q := r.URL.Query()
 	productKey, versionStr := q.Get("product"), q.Get("version")
 	if productKey == "" || versionStr == "" {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("product and version are required"))

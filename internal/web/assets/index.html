@@ -49,6 +49,11 @@
           in the map, to trace what it joins.
         </p>
         <div class="stack-actions">
+          <!--
+            The generation picker. Unlike the checkbox beside it this is not a view
+            filter: it changes which graph the solver runs on, so it re-asks the server.
+          -->
+          <div id="generations" class="segmented" role="group" aria-label="Platform generation"></div>
           <label class="toggle">
             <input type="checkbox" id="hide-legacy" checked>
             Hide legacy releases
@@ -65,7 +70,29 @@
       <!-- The map: what branches out of the selected version, drawn bottom-up. -->
       <div class="map-with-rail">
         <figure class="map-frame">
-          <div id="map" class="map" role="img" aria-labelledby="map-caption"></div>
+          <!--
+            tabindex so the drawing itself can be reached and panned from the keyboard.
+            It is one stop before the version nodes inside it, which is also the order
+            the controls below read in.
+          -->
+          <!--
+            role="group", not "img": the drawing holds focusable version buttons, and an
+            image is not allowed to contain them. It was role="img" while the map was a
+            picture you could only look at.
+          -->
+          <div id="map" class="map" role="group" tabindex="0"
+               aria-labelledby="map-caption"
+               aria-describedby="map-controls-help"></div>
+          <div id="map-controls" class="map-controls" hidden>
+            <span id="map-controls-help" class="visually-hidden">
+              Arrow keys pan the map. Plus and minus zoom. Zero resets.
+            </span>
+            <button type="button" id="map-zoom-out" class="ghost" title="Zoom out">&minus;</button>
+            <button type="button" id="map-zoom-in" class="ghost" title="Zoom in">+</button>
+            <button type="button" id="map-fit" class="ghost" title="Fit the whole map">Fit</button>
+            <button type="button" id="map-reset" class="ghost" title="Back to full size">Reset</button>
+            <span id="map-zoom-level" class="map-zoom-level" aria-live="polite"></span>
+          </div>
           <figcaption id="map-caption" class="map-caption"></figcaption>
         </figure>
         <!-- The rail is where node details land when there is room for it. It sits

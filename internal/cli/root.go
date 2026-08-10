@@ -22,6 +22,7 @@ type globals struct {
 	csvOut      bool
 	allVersions bool
 	minVersions []string
+	generation  int
 	maxAge      time.Duration
 	// mode is the resolved output mode, decided once in PersistentPreRun.
 	mode OutputMode
@@ -66,6 +67,9 @@ Start with ` + "`vkstack explain`" + ` for how the pieces fit together, or
 	pf.BoolVar(&g.allVersions, "all-versions", false, "ignore the supported-version floor")
 	pf.StringArrayVar(&g.minVersions, "min-version", nil,
 		"override a product's version floor, e.g. --min-version vcenter=9.0.0.0 (repeatable)")
+	pf.IntVar(&g.generation, "generation", 0,
+		"restrict to one vSphere platform generation by vCenter major, e.g. --generation 9 "+
+			"(default: every generation)")
 	pf.DurationVar(&g.maxAge, "max-age", 7*24*time.Hour, "warn when the cache is older than this")
 
 	root.AddCommand(

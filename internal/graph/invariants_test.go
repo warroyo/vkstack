@@ -22,7 +22,10 @@ import (
 // NOT SUPPORTED. Pairs outside the constraint set are allowed to say no — that is the
 // whole point of the constraint set being narrower than the published matrix, and
 // upstream publishes plenty of such cells. See model.Constrains.
-func realGraph(t *testing.T) *Graph {
+func realGraph(t *testing.T) *Graph { return realGraphOpts(t, Options{}) }
+
+// realGraphOpts loads the same cache under a specific set of load-time filters.
+func realGraphOpts(t *testing.T, opts Options) *Graph {
 	t.Helper()
 	path := os.Getenv("VKSTACK_TEST_CACHE")
 	if path == "" {
@@ -38,7 +41,7 @@ func realGraph(t *testing.T) *Graph {
 	if err != nil {
 		t.Fatalf("loading cache: %v", err)
 	}
-	g, err := Load(snap, Options{})
+	g, err := Load(snap, opts)
 	if err != nil {
 		t.Fatalf("loading graph: %v", err)
 	}

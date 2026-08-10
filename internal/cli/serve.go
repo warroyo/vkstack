@@ -204,10 +204,13 @@ func isCold(db *store.DB) bool {
 // per request on a hosted instance. The cached copy is dropped when the cache's fetched_at
 // changes, so a refresh — from the schedule, or from a separate `vkstack refresh` against
 // the same cache — is picked up without a restart.
+// One graph is kept per generation asked for, because a generation is a load-time filter
+// and so a different graph rather than a different view of one. There are only ever a
+// handful, and a refresh drops them all together.
 type cachedLoader struct {
 	db        *store.DB
 	mu        sync.Mutex
-	graph     *graph.Graph
+	graphs    map[int]*graph.Graph
 	fetchedAt int64
 }
 
@@ -216,10 +219,10 @@ func newCachedLoader(db *store.DB) *cachedLoader { return &cachedLoader{db: db} 
 func (c *cachedLoader) invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.graph = nil
+	c.graphs = nil
 }
 
-func (c *cachedLoader) get() (*graph.Graph, error) {
+func (c *cachedLoader) get(generation int) (*graph.Graph, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -232,15 +235,22 @@ func (c *cachedLoader) get() (*graph.Graph, error) {
 	if at.IsZero() {
 		return nil, errors.New("no cached data yet — run `vkstack refresh`, or start with --refresh-interval")
 	}
-	if c.graph != nil && at.UnixMilli() == c.fetchedAt {
-		return c.graph, nil
+	// A refresh invalidates every generation at once: they are all views of one cache.
+	if at.UnixMilli() != c.fetchedAt {
+		c.graphs, c.fetchedAt = nil, at.UnixMilli()
+	}
+	if g, ok := c.graphs[generation]; ok {
+		return g, nil
 	}
 
-	loaded, err := loadGraphFrom(c.db)
+	loaded, err := loadGraphFrom(c.db, generation)
 	if err != nil {
 		return nil, err
 	}
-	c.graph, c.fetchedAt = loaded, loaded.FetchedAt
+	if c.graphs == nil {
+		c.graphs = map[int]*graph.Graph{}
+	}
+	c.graphs[generation] = loaded
 	return loaded, nil
 }
 

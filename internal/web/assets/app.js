@@ -844,7 +844,8 @@ function togglePin(layerKey, node) {
 // elsewhere would silently desynchronise the URL from the picture.
 function setPin(pin, { push = true } = {}) {
   state.pin = pin;
-  hidePeek();
+  // Forced: the map is about to be redrawn, so details for the old picture are stale.
+  hidePeek(true);
   syncURL(push);
   loadStack();
 }
@@ -1268,11 +1269,31 @@ function labelFor(key) {
 // hover-only, pointer-events:none tooltip makes impossible.
 let peekLock = null;
 
-function showPeek(anchor, layer, node) {
-  if (peekLock && peekLock !== node.id) return; // a locked popover is not overwritten
-  const peek = $("#peek");
-  peek.textContent = "";
+// The rail takes over from the floating popover whenever the viewport is wide enough to
+// give it a column of its own. Below that there is nowhere to put it that is not on top
+// of the map, so the popover stays.
+const railQuery = window.matchMedia("(min-width: 62rem)");
+const railActive = () => railQuery.matches;
+railQuery.addEventListener("change", () => {
+  hidePeek(true);
+  renderRailPlaceholder();
+});
 
+// renderRailPlaceholder says what the rail is for while nothing is selected, rather than
+// leaving an unexplained empty column beside the map.
+function renderRailPlaceholder() {
+  const rail = $("#peek-rail");
+  if (!rail) return;
+  rail.textContent = "";
+  if (!railActive()) return;
+  rail.append(el("div", { class: "peek-rail-empty" },
+    "Hover a node for its exact builds, provenance and upstream notes."));
+}
+
+// peekParts builds what a node has to say, independent of where it will be shown.
+// Returns null when there is nothing worth showing. How much of it survives is the
+// caller's decision: the rail has a column to itself, a floating popover does not.
+function peekParts(layer, node) {
   // What the node means comes first and is never truncated; the release list is what
   // gets cut when it is long. Putting provenance after the list buried the one part a
   // reader cannot reconstruct for themselves.
@@ -1287,6 +1308,9 @@ function showPeek(anchor, layer, node) {
       ? "Train vsc9 — these versions ship with vCenter 9.x"
       : `Train ${node.train} — numbered separately from vCenter`);
   }
+  // Why this node hands over an older build than its newest. Placed with the other
+  // head lines so it is read before the release list, not after it.
+  if (node.pinNote) head.push(node.pinNote);
   if (node.legacy) {
     head.push(`${node.phaseLabel} — this is what the interop site's ` +
       `"hide legacy releases" checkbox removes.`);
@@ -1311,14 +1335,29 @@ function showPeek(anchor, layer, node) {
   } else if (notes.length === 1 && notes[0] !== node.label) {
     body.push(notes[0]);
   }
-  if (!head.length && !body.length) return;
+  if (!head.length && !body.length) return null;
+  return { title: `${layer.label} ${node.label}`, head, body };
+}
+
+function showPeek(anchor, layer, node) {
+  // The rail ignores the lock. Locking exists so a floating popover survives the pointer
+  // leaving it; the rail already stays put, and honouring a lock there would only freeze
+  // it on one node while the reader hovers others.
+  if (railActive()) { showPeekInRail(layer, node); return; }
+  if (peekLock && peekLock !== node.id) return; // a locked popover is not overwritten
+
+  const peek = $("#peek");
+  peek.textContent = "";
+  const parts = peekParts(layer, node);
+  if (!parts) return;
+  const { head, body } = parts;
 
   const locked = peekLock === node.id;
   // Locked, the whole list is shown and stays put; hovering, it is capped so the popover
   // does not swallow the page.
   const room = locked ? body.length : Math.max(0, 16 - head.length);
   peek.append(el("div", { class: "peek-title" },
-    `${layer.label} ${node.label}`,
+    parts.title,
     el("span", { class: "peek-hint" },
       locked ? "Esc or shift-click to release" : "shift-click to keep open")));
   for (const line of head) peek.append(el("div", { class: "peek-head" }, line));
@@ -1338,6 +1377,30 @@ function showPeek(anchor, layer, node) {
   const size = peek.getBoundingClientRect();
   peek.style.top = `${peekTop(anchor, box, size)}px`;
   peek.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - size.width - 8))}px`;
+}
+
+// showPeekInRail renders the same content into the column beside the map.
+//
+// Nothing is truncated and the copy button is always there, because the rail is not
+// competing with the drawing for space. It also does not need a lock to be readable: the
+// content stays put when the pointer leaves, so it can be read and selected without
+// holding a hover steady.
+function showPeekInRail(layer, node) {
+  const rail = $("#peek-rail");
+  if (!rail) return;
+  const parts = peekParts(layer, node);
+  if (!parts) return;
+  rail.textContent = "";
+  rail.append(el("div", { class: "peek-title" }, parts.title));
+  for (const line of parts.head) rail.append(el("div", { class: "peek-head" }, line));
+  for (const line of parts.body) rail.append(el("div", {}, line));
+  if (parts.body.length) {
+    rail.append(el("div", { class: "peek-actions" },
+      el("button", {
+        class: "ghost", type: "button",
+        onclick: (ev) => copyText([...parts.body].join("\n"), ev.currentTarget, "Copied"),
+      }, "Copy releases")));
+  }
 }
 
 // peekTop keeps the popover off the thing it is describing.
@@ -1361,6 +1424,7 @@ function peekTop(anchor, box, size) {
 // togglePeekLock is bound to a modified click on a node: keep this popover open, with its
 // full release list and a copy button, until it is dismissed. A plain click still pins.
 function togglePeekLock(anchor, layer, node) {
+  if (railActive()) { showPeekInRail(layer, node); return; } // nothing to keep open
   peekLock = peekLock === node.id ? null : node.id;
   if (peekLock) showPeek(anchor, layer, node);
   else hidePeek(true);
@@ -1372,6 +1436,10 @@ function hidePeek(force = false) {
   const peek = $("#peek");
   peek.classList.add("hidden");
   peek.classList.remove("is-locked");
+  // The rail keeps the last node's details on an ordinary mouseleave. Clearing them the
+  // instant the pointer moves off would make anything longer than a glance unreadable,
+  // which is the failure the rail exists to fix. An explicit dismissal still clears it.
+  if (force) renderRailPlaceholder();
 }
 
 // --- tabs -------------------------------------------------------------------
@@ -1430,6 +1498,7 @@ function setMyStack(pin) {
 }
 
 async function boot() {
+  renderRailPlaceholder();
   try {
     const meta = await api("/api/meta");
     // Kept, not just printed: the manifest has to stamp which snapshot it came from.
@@ -1478,7 +1547,8 @@ $("#filter").addEventListener("input", (ev) => {
 });
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
-    if (!$("#peek").classList.contains("hidden")) { hidePeek(true); return; }
+    const railShowing = railActive() && $("#peek-rail")?.querySelector(".peek-title");
+    if (railShowing || !$("#peek").classList.contains("hidden")) { hidePeek(true); return; }
     if (state.pin) setPin(null);
   }
 });

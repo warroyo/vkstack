@@ -452,7 +452,8 @@ button.ghost.inline { margin-left: 0.6rem; }
   pointer-events: none;
 }
 
-.peek .peek-title {
+.peek .peek-title,
+.peek-rail .peek-title {
   font-family: inherit;
   font-weight: 700;
   margin-bottom: 0.25rem;
@@ -482,13 +483,54 @@ button.ghost.inline { margin-left: 0.6rem; }
 
 /* What a node means, as opposed to which releases it covers. Never truncated: the release
    list is what gets cut when the popover runs out of room. */
-.peek .peek-head {
+.peek .peek-head,
+.peek-rail .peek-head {
   font-family: ui-sans-serif, system-ui, sans-serif;
   color: var(--muted);
   margin-bottom: 0.2rem;
 }
 
 .peek.hidden { display: none; }
+
+/* ---- the detail rail ---------------------------------------------------- */
+
+/* Below the breakpoint there is no column to spare, so the rail collapses and the
+   floating popover above does the work. app.js watches the same width. */
+.map-with-rail { display: block; }
+.peek-rail { display: none; }
+
+@media (min-width: 62rem) {
+  .map-with-rail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 20rem;
+    gap: 1rem;
+    align-items: start;
+  }
+  /* Outside the frame, so it never covers the connection a hover is tracing. Sticky, so
+     it stays in view on a map tall enough to scroll. */
+  .peek-rail {
+    display: block;
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--hair);
+    border-radius: var(--radius);
+    background: var(--panel);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    line-height: 1.45;
+    user-select: text;
+  }
+}
+
+.peek-rail-empty {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  color: var(--faint);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
 
 /* ---- shared ------------------------------------------------------------ */
 

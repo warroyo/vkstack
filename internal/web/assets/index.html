@@ -63,10 +63,17 @@
       <div id="stack-error" class="error hidden"></div>
 
       <!-- The map: what branches out of the selected version, drawn bottom-up. -->
-      <figure class="map-frame">
-        <div id="map" class="map" role="img" aria-labelledby="map-caption"></div>
-        <figcaption id="map-caption" class="map-caption"></figcaption>
-      </figure>
+      <div class="map-with-rail">
+        <figure class="map-frame">
+          <div id="map" class="map" role="img" aria-labelledby="map-caption"></div>
+          <figcaption id="map-caption" class="map-caption"></figcaption>
+        </figure>
+        <!-- The rail is where node details land when there is room for it. It sits
+             outside the frame, so it can never cover the connection a hover is tracing —
+             which is the whole reason the floating popover had to park itself at the edge
+             of the map and end up far from the node it described. -->
+        <aside id="peek-rail" class="peek-rail" aria-live="polite"></aside>
+      </div>
 
       <ul class="legend" id="legend">
         <li><span class="swatch sw-general"></span>General Support</li>

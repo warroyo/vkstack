@@ -66,13 +66,40 @@ curl -fsSL -O https://raw.githubusercontent.com/warroyo/vkstack/main/install.sh
 less install.sh && sh install.sh
 ```
 
-Other ways in: grab an archive from the
-[releases page](https://github.com/warroyo/vkstack/releases) (Linux, macOS and Windows,
-amd64 and arm64), `go install github.com/warroyo/vkstack/cmd/vkstack@latest` if you have Go,
-or `go build ./cmd/vkstack` from a clone.
+Other ways in: `npm i -g @warroyo90/vkstack-mcp`, which carries the same prebuilt binaries;
+grab an archive from the [releases page](https://github.com/warroyo/vkstack/releases)
+(Linux, macOS and Windows, amd64 and arm64);
+`go install github.com/warroyo/vkstack/cmd/vkstack@latest` if you have Go; or
+`go build ./cmd/vkstack` from a clone.
 
-For wiring it into an agent, `claude mcp add vkstack -- vkstack mcp`, see
-[AGENTS.md](AGENTS.md).
+## Wiring it into an agent
+
+Nothing to install first — this is the whole setup, in any client that reads an
+`mcpServers` object:
+
+```json
+{
+  "mcpServers": {
+    "vkstack": {
+      "command": "npx",
+      "args": ["-y", "@warroyo90/vkstack-mcp", "mcp", "--refresh-if-empty"]
+    }
+  }
+}
+```
+
+Claude Code:
+
+```sh
+claude mcp add vkstack -- npx -y @warroyo90/vkstack-mcp mcp --refresh-if-empty
+```
+
+`npx` pulls the `@warroyo90/vkstack-mcp` package, which declares one prebuilt binary per
+platform as an optional dependency, so a machine downloads only its own.
+`--refresh-if-empty` fills the cache on first start, which is what makes a cold machine
+answer at all; it costs about a minute, once. [AGENTS.md](AGENTS.md) has the rest: the
+tools, the envelope, the exit codes, and the same config for a machine that already has
+the binary.
 
 ## Commands
 
@@ -306,6 +333,8 @@ internal/graph/     in-memory queries: compat, check, stack solving
 internal/cli/       cobra commands; output.go holds the agent-facing contract,
                     describe.go the surface document, mcp.go the stdio MCP server
 internal/web/       localhost UI, assets embedded
+npm/                the npm face: bin/vkstack.js launches the right prebuilt
+                    binary, build.mjs stages the packages from a goreleaser build
 docs/model.md       generated from internal/model — do not edit by hand
 AGENTS.md           the contract for programs calling this tool
 ```
@@ -337,6 +366,20 @@ go test ./...
 # Check the recorded pair coverage still matches upstream (needs a refreshed cache):
 VKSTACK_TEST_CACHE=~/.cache/vkstack/vkstack.db go test ./internal/graph -run Coverage
 ```
+
+### The npm packages
+
+Publishing happens in the release workflow; staging them locally is how you check the
+launcher before a tag goes out. `build.mjs` reads goreleaser's own manifest rather than
+building anything, so it needs a `dist/` to read:
+
+```sh
+goreleaser build --snapshot --clean
+node npm/build.mjs 0.0.0-test
+```
+
+It ends by running the staged launcher against the staged package for this machine, so a
+broken resolve or a lost permission bit fails there rather than on the registry.
 
 ### The auth key
 

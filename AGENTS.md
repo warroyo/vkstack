@@ -93,7 +93,14 @@ Each download is checked against the release's `checksums.txt` before install.
 
 If a Go toolchain is present, `go install github.com/warroyo/vkstack/cmd/vkstack@latest`
 works too, as does downloading an archive from the
-[releases page](https://github.com/warroyo/vkstack/releases).
+[releases page](https://github.com/warroyo/vkstack/releases), or npm:
+
+```sh
+npm install -g @warroyo90/vkstack-mcp     # puts `vkstack` on PATH
+npx -y @warroyo90/vkstack-mcp --version   # or no install at all
+```
+
+To wire it into an agent without installing anything, skip to [MCP](#mcp).
 
 Then populate the cache once — **this step is not optional**, and skipping it is the most
 likely reason a fresh install appears broken:
@@ -109,16 +116,46 @@ through a failed answer.
 
 ## MCP
 
+### Nothing installed: npx
+
+The published [`@warroyo90/vkstack-mcp`][npm] package carries the same prebuilt binaries as
+the release archives, one per platform, and npm installs only the one matching the
+machine. So a config block is enough on its own — there is nothing to install first:
+
+[npm]: https://www.npmjs.com/package/@warroyo90/vkstack-mcp
+
+```json
+{
+  "mcpServers": {
+    "vkstack": {
+      "command": "npx",
+      "args": ["-y", "@warroyo90/vkstack-mcp", "mcp", "--refresh-if-empty"]
+    }
+  }
+}
+```
+
+That is the shape Claude Desktop, Cursor, Windsurf, Codex, Continue and anything else
+reading an `mcpServers` object will take.
+
 **Claude Code:**
 
 ```sh
-claude mcp add vkstack -- vkstack mcp
+claude mcp add vkstack -- npx -y @warroyo90/vkstack-mcp mcp --refresh-if-empty
 ```
 
-This repo also ships a project-scoped [`.mcp.json`](.mcp.json), so an agent working inside
-a clone gets the server offered with no setup at all.
+`--refresh-if-empty` is not optional here the way it is below. A machine that reaches for
+`npx` is by definition one nobody prepared, so its cache is empty and every tool call
+would fail without it. The cost lands on the first call after the server starts, which
+spends ~1 min fetching before it answers; everything after that is local. Run
+`npx -y @warroyo90/vkstack-mcp refresh` once by hand beforehand if you would rather not pay
+it inside a conversation.
 
-**Claude Desktop / generic clients** — add to the `mcpServers` object:
+The package ships the whole CLI, not just the server:
+`npx -y @warroyo90/vkstack-mcp stack vcenter 8.0U3k` works too, and a global install
+(`npm i -g @warroyo90/vkstack-mcp`) puts `vkstack` on PATH.
+
+### Already have the binary
 
 ```json
 {
@@ -131,8 +168,11 @@ a clone gets the server offered with no setup at all.
 }
 ```
 
-**On a machine that may not have a populated cache yet**, add `--refresh-if-empty` so a
-cold install fetches once at startup rather than failing every tool call:
+Claude Code: `claude mcp add vkstack -- vkstack mcp`. This repo also ships a
+project-scoped [`.mcp.json`](.mcp.json) in this form, so an agent working inside a clone
+gets the server offered with no setup at all.
+
+Add `--refresh-if-empty` here too if the cache may not be populated yet:
 
 ```json
 { "mcpServers": { "vkstack": { "command": "vkstack", "args": ["mcp", "--refresh-if-empty"] } } }
@@ -142,6 +182,8 @@ That flag is deliberately a launch option rather than lazy behaviour inside a to
 the operator starting the server decides whether the host may reach upstream, so a model
 asking a question can never trigger network I/O as a side effect. A stale cache is left
 alone — only a completely empty one is filled.
+
+### What the server gives you
 
 Tools: `vkstack_stack`, `vkstack_check`, `vkstack_compat`, `vkstack_releases`,
 `vkstack_products`, `vkstack_model`. Each returns both a text block and

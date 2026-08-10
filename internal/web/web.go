@@ -25,7 +25,10 @@ func AssetsFS() (fs.FS, error) {
 }
 
 // Loader rebuilds the graph, so the UI can pick up a refresh without a restart.
-type Loader func() (*graph.Graph, error)
+//
+// The generation is a parameter because it is a load-time filter: a request for vSphere 9
+// is a different graph, not a different view of one. Zero means every generation.
+type Loader func(generation int) (*graph.Graph, error)
 
 // Refresher pulls fresh data from upstream, reporting progress.
 type Refresher func(progress func(step, total int, message string)) error
@@ -97,7 +100,10 @@ type productJSON struct {
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
-	g, err := s.cfg.Load()
+	// Meta carries per-product release counts, so it answers for the active generation
+	// rather than always for the whole cache — otherwise the manifest would contradict
+	// the map sitting next to it.
+	g, err := s.cfg.Load(generationFromQuery(r.URL.Query().Get("gen")))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
@@ -125,12 +131,15 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 
 	fetched := time.UnixMilli(g.FetchedAt)
 	resp := map[string]any{
-		"products":  products,
-		"pairs":     pairs,
-		"fetchedAt": fetched.Format(time.RFC3339),
-		"ageHours":  int(time.Since(fetched).Hours()),
-		"readOnly":  s.cfg.ReadOnly,
-		"version":   s.cfg.Version,
+		"products": products,
+		"pairs":    pairs,
+		// The generations the filter offers, so the client renders tabs from the server's
+		// list rather than hardcoding a second copy that can drift.
+		"generations": model.Generations,
+		"fetchedAt":   fetched.Format(time.RFC3339),
+		"ageHours":    int(time.Since(fetched).Hours()),
+		"readOnly":    s.cfg.ReadOnly,
+		"version":     s.cfg.Version,
 	}
 	if s.cfg.RefreshInterval > 0 {
 		resp["refreshInterval"] = s.cfg.RefreshInterval.String()
@@ -161,7 +170,7 @@ func toReleaseJSON(rs []*graph.Release) []releaseJSON {
 }
 
 func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
-	g, err := s.cfg.Load()
+	g, err := s.cfg.Load(generationFromQuery(r.URL.Query().Get("gen")))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
@@ -182,6 +191,19 @@ type pinsRequest struct {
 	// Include opts optional products (NSX, Avi) into the solve, by product key. Each is
 	// independent; a pin on one is already an opt-in for that one alone.
 	Include []string `json:"include"`
+	// Generation restricts the solve to one vSphere platform generation by vCenter major.
+	// Zero, and anything the model does not know, means every generation.
+	Generation int `json:"generation"`
+}
+
+// generation is the request's generation, ignoring one the model does not offer. A body
+// is less likely than a query string to be stale, but the failure mode is the same and
+// silently widening beats an error page.
+func (r pinsRequest) generation() int {
+	if !model.KnownGeneration(r.Generation) {
+		return 0
+	}
+	return r.Generation
 }
 
 // include returns the requested optional product keys, dropping anything that is not an
@@ -221,14 +243,16 @@ func decode(r *http.Request) (pinsRequest, error) {
 }
 
 func (s *Server) handleStack(w http.ResponseWriter, r *http.Request) {
-	g, err := s.cfg.Load()
-	if err != nil {
-		writeErr(w, http.StatusServiceUnavailable, err)
-		return
-	}
+	// Decoded before the load, because the body names the generation and the generation
+	// decides which graph to build.
 	req, err := decode(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	g, err := s.cfg.Load(req.generation())
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err)
 		return
 	}
 	pins, err := resolve(g, req.Pins)
@@ -344,14 +368,14 @@ func statusWord(status int) string {
 }
 
 func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
-	g, err := s.cfg.Load()
-	if err != nil {
-		writeErr(w, http.StatusServiceUnavailable, err)
-		return
-	}
 	req, err := decode(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	g, err := s.cfg.Load(req.generation())
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err)
 		return
 	}
 	pins, err := resolve(g, req.Pins)

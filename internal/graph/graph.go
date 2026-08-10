@@ -117,6 +117,12 @@ type Options struct {
 	AllVersions bool
 	// MinVersions overrides a product's floor, keyed by product short key.
 	MinVersions map[string]string
+	// Generation restricts the answer to one vSphere platform generation, named by the
+	// vCenter major version. Zero means every generation.
+	//
+	// Only vCenter is filtered by its own version; see model.Generations for why. Every
+	// other product is kept or dropped by whether it can still reach a surviving vCenter.
+	Generation int
 }
 
 // Load builds the in-memory graph from a cache snapshot, applying the version floor.
@@ -154,6 +160,10 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 			g.Excluded[r.ProductID]++
 			continue
 		}
+		if opts.Generation > 0 && p.Key == "vcenter" && v.Major() != opts.Generation {
+			g.Excluded[r.ProductID]++
+			continue
+		}
 		g.Releases[r.ID] = &Release{
 			ID:          r.ID,
 			ProductID:   r.ProductID,
@@ -182,6 +192,11 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 	// ESX or vCenter release. Anything that only ever worked with vSphere 7 falls out
 	// on its own, without inventing a cutoff we have no basis for.
 	g.pruneUnreachable(floors)
+
+	// Pass 4: narrow everything else to what the chosen generation can still reach.
+	if opts.Generation > 0 {
+		g.pruneToGeneration()
+	}
 
 	g.indexByProduct()
 	return g, nil
@@ -220,7 +235,57 @@ func (g *Graph) pruneUnreachable(floors map[string]version.Version) {
 		}
 	}
 
-	// Drop edges that now dangle.
+	g.dropDanglingEdges()
+}
+
+// pruneToGeneration removes releases that cannot reach a surviving vCenter.
+//
+// This has to be its own pass rather than a wider base set for pruneUnreachable, because
+// that one skips every floored product as a base it never questions. ESX carries a floor,
+// so under a generation filter an ESX release that only ever paired with vCenter 8 would
+// survive a pass that only asks about floor-less products. Here vCenter is the sole base
+// and everything else, ESX included, has to earn its place.
+//
+// One hop is enough: vCenter is the hub, and every other product publishes vCenter pairs.
+// A product that publishes none is left whole — an absent pair is not evidence of
+// incompatibility, and the stack already reports answers resting on one as inferred.
+func (g *Graph) pruneToGeneration() {
+	vcenter, ok := model.ByKey("vcenter")
+	if !ok {
+		return
+	}
+
+	// Only judge a product upstream actually publishes against vCenter.
+	judged := map[int]bool{}
+	for _, p := range model.Products {
+		if p.ID != vcenter.ID && g.Coverage[pair(p.ID, vcenter.ID)] {
+			judged[p.ID] = true
+		}
+	}
+
+	for id, r := range g.Releases {
+		if !judged[r.ProductID] {
+			continue
+		}
+		reachable := false
+		for _, e := range g.Compat[id] {
+			peer := g.Releases[e.Peer]
+			if peer != nil && peer.ProductID == vcenter.ID && Compatible(e.Status) {
+				reachable = true
+				break
+			}
+		}
+		if !reachable {
+			g.Excluded[r.ProductID]++
+			delete(g.Releases, id)
+		}
+	}
+
+	g.dropDanglingEdges()
+}
+
+// dropDanglingEdges removes compatibility entries whose endpoints a prune has deleted.
+func (g *Graph) dropDanglingEdges() {
 	for id, edges := range g.Compat {
 		if _, ok := g.Releases[id]; !ok {
 			delete(g.Compat, id)

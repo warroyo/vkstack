@@ -29,6 +29,17 @@ type Version struct {
 	Parsed bool
 }
 
+// Major returns the leading number: 8 for "8.0U3k", 9 for "9.1.0.0300", 3 for "3.7.0+v1.36".
+//
+// Parse always leaves at least one run behind, even for a string it did not recognise, so
+// the guard here only catches a zero Version that never went through Parse at all.
+func (v Version) Major() int {
+	if len(v.Key) == 0 || len(v.Key[0]) == 0 {
+		return 0
+	}
+	return v.Key[0][0]
+}
+
 var (
 	// "8.0", "8.0c", "8.0.0c", "8.0U1", "8.0U3k" — up to three dotted numbers, an
 	// optional U<n> update, and an optional single letter.

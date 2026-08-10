@@ -88,7 +88,9 @@ func (l *Ledger) Snapshot() map[string]any {
 // actually has data, so a rollout does not go green on an instance that has nothing to
 // answer with yet.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	g, err := s.cfg.Load()
+	// The probe asks whether there is data at all, which is a question about the cache
+	// rather than about any one generation.
+	g, err := s.cfg.Load(0)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"ok": false, "error": err.Error(),

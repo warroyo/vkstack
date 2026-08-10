@@ -22,32 +22,36 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/warroyo/vkstack/internal/model"
 	"github.com/warroyo/vkstack/internal/web"
 )
 
 // siteData is one bundle file: every answer the page can give while a particular set of
-// optional layers is open.
+// optional layers is open, under one platform generation.
 //
-// There is one file per combination — `data.json` for the plain map, `data-nsx.json`,
-// `data-avi.json`, `data-nsx-avi.json` — and the page fetches only the one it needs.
+// There is one file per state — `data.json` for the plain map, then `data-nsx.json`,
+// `data-nsx-gen9.json` and so on — and the page fetches only the one it needs. See
+// bundleKey for the naming.
 //
 // Opening a layer changes the whole answer, not a corner of it: which nodes are lit, how
-// each surviving node is narrowed, the edges, the recommendation. So the four states
-// cannot share storage. An earlier version stored one full answer plus three small deltas
-// on the grounds that `layers` and `lit` were identical across all four. They were — but
-// only because three of the server's five solve sites were dropping the include set. The
-// invariant was a bug wearing an optimisation's clothes, and it is not coming back.
+// each surviving node is narrowed, the edges, the recommendation. So the states cannot
+// share storage. An earlier version stored one full answer plus three small deltas on the
+// grounds that `layers` and `lit` were identical across all four. They were — but only
+// because three of the server's five solve sites were dropping the include set. The
+// invariant was a bug wearing an optimisation's clothes, and it is not coming back. The
+// generation split obeys the same rule for the same reason.
 //
-// Splitting by file rather than shipping all four in one is what keeps that honest and
-// cheap: `layers` is three quarters of the bytes, and most readers never open either
-// optional layer, so they should never download or parse the other three states.
+// Splitting by file rather than shipping every state in one is what keeps that honest and
+// cheap: `layers` is three quarters of the bytes, most readers never open either optional
+// layer, and nobody reads two generations at once.
 type siteData struct {
-	// Meta and StackMap are written only into the base file; the variant files carry
-	// nothing the page needs before a layer is opened.
+	// Meta and StackMap are written only into each generation's base file; the variant
+	// files carry nothing the page needs before a layer is opened.
 	Meta json.RawMessage `json:"meta,omitempty"`
 	// StackMap is the unpinned map: what the page shows before anything is selected.
 	StackMap json.RawMessage `json:"stackmap,omitempty"`
@@ -57,16 +61,49 @@ type siteData struct {
 	StackMaps map[string]map[string]json.RawMessage `json:"stackmaps"`
 }
 
-// bundleName is the file one set of open optional layers is written to.
+// bundleKey identifies one bundle: a set of open optional layers, under one generation.
+//
+// Generation is part of the key rather than a filter applied to a shared bundle because
+// it changes the answer at load time, not at display time. Under vSphere 9 a Supervisor
+// node is narrowed to the releases a vCenter 9 can carry, the recommended stack is a
+// different stack, and whole vCenter nodes are gone. See the note above siteData for what
+// happened last time two states that differed were made to share storage.
+type bundleKey struct {
+	With string
+	Gen  int
+}
+
+// bundleName is the file one bundle is written to.
 //
 // The `with` value is already canonicalised in model order by the client, so the mapping
-// is stable: "" -> data.json, "nsx,avi" -> data-nsx-avi.json. Commas become dashes
-// because a query-string separator has no business in a filename on a static host.
-func bundleName(with string) string {
-	if with == "" {
-		return "data.json"
+// is stable: {"", 0} -> data.json, {"nsx,avi", 9} -> data-nsx-avi-gen9.json. Commas
+// become dashes because a query-string separator has no business in a filename on a
+// static host.
+func bundleName(key bundleKey) string {
+	name := "data"
+	if key.With != "" {
+		name += "-" + strings.ReplaceAll(key.With, ",", "-")
 	}
-	return "data-" + strings.ReplaceAll(with, ",", "-") + ".json"
+	if key.Gen != 0 {
+		name += fmt.Sprintf("-gen%d", key.Gen)
+	}
+	return name + ".json"
+}
+
+// bundleKeys returns every bundle the page can ask for, in a stable order.
+//
+// That is every set of open optional layers under every generation, plus the unfiltered
+// one — four subsets across three generations today, so twelve files. The reader still
+// downloads exactly one.
+func bundleKeys() []bundleKey {
+	gens := append([]int{0}, model.Generations...)
+	out := make([]bundleKey, 0, len(gens)*(1<<len(optionalKeys())))
+	for _, gen := range gens {
+		for _, with := range optionalSubsets() {
+			out = append(out, bundleKey{With: with, Gen: gen})
+		}
+	}
+	return out
 }
 
 // optionalSubsets returns every combination of optional layers the page can be in, in a
@@ -117,7 +154,7 @@ the CLI, the HTTP API and MCP.`),
 
 			load := newCachedLoader(db)
 			// Fail here rather than writing a site whose every answer is an error page.
-			if _, err := load.get(); err != nil {
+			if _, err := load.get(0); err != nil {
 				return err
 			}
 
@@ -143,15 +180,22 @@ the CLI, the HTTP API and MCP.`),
 				return err
 			}
 
+			// Counted across every generation, because each enumerates its own node list
+			// and the whole point of the split is that they differ.
 			nodes := 0
-			for product, versions := range bundles[""].StackMaps {
-				if product != "" {
-					nodes += len(versions)
+			for _, key := range bundleKeys() {
+				if key.With != "" {
+					continue // the same nodes, answered with a layer open
+				}
+				for product, versions := range bundles[key].StackMaps {
+					if product != "" {
+						nodes += len(versions)
+					}
 				}
 			}
 			names := make([]string, 0, len(bundles))
-			for _, with := range optionalSubsets() {
-				names = append(names, bundleName(with))
+			for _, key := range bundleKeys() {
+				names = append(names, bundleName(key))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"wrote %s: %d pinned views across %d bundles (%s)\n",
@@ -175,26 +219,61 @@ func ask(handler http.Handler, path string) (json.RawMessage, error) {
 	return json.RawMessage(append([]byte(nil), rec.Body.Bytes()...)), nil
 }
 
-// generate produces one bundle per combination of open optional layers, keyed by the
-// `with` value the client sends.
-func generate(handler http.Handler) (map[string]*siteData, error) {
-	subsets := optionalSubsets()
-	bundles := make(map[string]*siteData, len(subsets))
-	for _, with := range subsets {
-		bundles[with] = &siteData{StackMaps: map[string]map[string]json.RawMessage{}}
+// generate produces one bundle per combination of open optional layers per generation.
+func generate(handler http.Handler) (map[bundleKey]*siteData, error) {
+	keys := bundleKeys()
+	bundles := make(map[bundleKey]*siteData, len(keys))
+	for _, key := range keys {
+		bundles[key] = &siteData{StackMaps: map[string]map[string]json.RawMessage{}}
 	}
-	base := bundles[""]
+
+	// Each generation is enumerated on its own, because it has its own node list: the
+	// vCenter row under vSphere 9 is a different row, not a subset of one view.
+	for _, gen := range append([]int{0}, model.Generations...) {
+		if err := generateGeneration(handler, bundles, gen); err != nil {
+			return nil, err
+		}
+	}
+	return bundles, nil
+}
+
+// generateGeneration fills in every bundle belonging to one generation.
+func generateGeneration(handler http.Handler, bundles map[bundleKey]*siteData, gen int) error {
+	subsets := optionalSubsets()
+	base := bundles[bundleKey{Gen: gen}]
+
+	// Query parameters common to every request in this generation.
+	genQuery := func() url.Values {
+		q := url.Values{}
+		if gen != 0 {
+			q.Set("gen", strconv.Itoa(gen))
+		}
+		return q
+	}
+	withQuery := func(q url.Values) string {
+		path := "/api/stackmap"
+		if len(q) > 0 {
+			path += "?" + q.Encode()
+		}
+		return path
+	}
 
 	var err error
-	if base.Meta, err = ask(handler, "/api/meta"); err != nil {
-		return nil, err
+	// Meta carries per-product release counts, which narrow with the generation, so each
+	// generation's base file gets its own rather than inheriting the unfiltered one.
+	metaPath := "/api/meta"
+	if gen != 0 {
+		metaPath += "?" + genQuery().Encode()
 	}
-	if base.StackMap, err = ask(handler, "/api/stackmap"); err != nil {
-		return nil, err
+	if base.Meta, err = ask(handler, metaPath); err != nil {
+		return err
+	}
+	if base.StackMap, err = ask(handler, withQuery(genQuery())); err != nil {
+		return err
 	}
 
 	put := func(product, version, with string, body json.RawMessage) {
-		maps := bundles[with].StackMaps
+		maps := bundles[bundleKey{With: with, Gen: gen}].StackMaps
 		if maps[product] == nil {
 			maps[product] = map[string]json.RawMessage{}
 		}
@@ -202,20 +281,16 @@ func generate(handler http.Handler) (map[string]*siteData, error) {
 	}
 
 	// answer fetches one node's view once per combination of open optional layers.
-	answer := func(product, version string, base url.Values) error {
+	answer := func(product, version string, pin url.Values) error {
 		for _, with := range subsets {
-			q := url.Values{}
-			for k, v := range base {
+			q := genQuery()
+			for k, v := range pin {
 				q[k] = v
 			}
 			if with != "" {
 				q.Set("with", with)
 			}
-			path := "/api/stackmap"
-			if len(q) > 0 {
-				path += "?" + q.Encode()
-			}
-			body, err := ask(handler, path)
+			body, err := ask(handler, withQuery(q))
 			if err != nil {
 				return err
 			}
@@ -227,7 +302,7 @@ func generate(handler http.Handler) (map[string]*siteData, error) {
 	// The unpinned map, under the empty product and version. Opening a layer before
 	// selecting anything is an ordinary thing to do.
 	if err := answer("", "", url.Values{}); err != nil {
-		return nil, err
+		return err
 	}
 
 	// The unpinned map already lists every node the page can offer, and each node carries
@@ -243,7 +318,7 @@ func generate(handler http.Handler) (map[string]*siteData, error) {
 		} `json:"layers"`
 	}
 	if err := json.Unmarshal(base.StackMap, &layout); err != nil {
-		return nil, fmt.Errorf("reading the unpinned map: %w", err)
+		return fmt.Errorf("reading the unpinned map for generation %d: %w", gen, err)
 	}
 
 	for _, layer := range layout.Layers {
@@ -260,16 +335,15 @@ func generate(handler http.Handler) (map[string]*siteData, error) {
 
 			if err := answer(layer.Key, version,
 				url.Values{"product": {layer.Key}, "version": {version}}); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
-
-	return bundles, nil
+	return nil
 }
 
 // writeSite copies the UI onto disk next to the generated bundles.
-func writeSite(outDir string, bundles map[string]*siteData) error {
+func writeSite(outDir string, bundles map[bundleKey]*siteData) error {
 	assets, err := web.AssetsFS()
 	if err != nil {
 		return err
@@ -307,12 +381,12 @@ func writeSite(outDir string, bundles map[string]*siteData) error {
 		return fmt.Errorf("writing the UI: %w", err)
 	}
 
-	for with, data := range bundles {
+	for key, data := range bundles {
+		name := bundleName(key)
 		body, err := json.Marshal(data)
 		if err != nil {
-			return fmt.Errorf("encoding the %q site data: %w", with, err)
+			return fmt.Errorf("encoding %s: %w", name, err)
 		}
-		name := bundleName(with)
 		if err := os.WriteFile(filepath.Join(outDir, name), body, 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", name, err)
 		}

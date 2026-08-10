@@ -139,9 +139,13 @@ type mcpServer struct {
 	out io.Writer
 	log io.Writer
 
-	mu    sync.Mutex
-	db    *store.DB
-	graph *graph.Graph
+	mu sync.Mutex
+	db *store.DB
+	// graphs holds one parsed graph per generation asked for, keyed by vCenter major
+	// with zero for "every generation". An agent tends to stay in one generation for a
+	// whole session, and there are only ever a handful.
+	graphs    map[int]*graph.Graph
+	fetchedAt int64
 }
 
 func (s *mcpServer) serve() error {
@@ -206,7 +210,12 @@ func (s *mcpServer) handle(req rpcRequest) rpcResponse {
 				"in a stack unless it is pinned or named in vkstack_stack's `include`, " +
 				"and a stack without them is a complete answer, not a partial one. " +
 				"Asking for one never brings in the other — Avi on a distributed switch " +
-				"with no NSX is an ordinary deployment. Answers are " +
+				"with no NSX is an ordinary deployment. " +
+				"`generation` narrows to one vSphere platform generation by vCenter " +
+				"major. It constrains vCenter alone: ESX 8.x, NSX 4.x, Avi 31.x and the " +
+				"Supervisor vsc0 train all pair with vCenter 9 upstream and stay on offer " +
+				"under it, so never assume a component's own major names its generation. " +
+				"Answers are " +
 				"never invented: pairs upstream does not publish are reported as inferred.",
 		}
 	case "ping":
@@ -231,6 +240,15 @@ func mcpTools() []map[string]any {
 	product := map[string]any{
 		"type": "string", "enum": productEnum,
 		"description": "product key",
+	}
+	// One description, four tools: a generation means the same thing everywhere, and the
+	// caveat about what it does not filter is the part an agent most needs.
+	generation := map[string]any{
+		"type": "integer", "enum": model.Generations,
+		"description": "restrict the answer to one vSphere platform generation, named by " +
+			"the vCenter major version. Omit for every generation. This constrains " +
+			"vCenter only — ESX 8.x, NSX 4.x, Avi 31.x and the Supervisor vsc0 train all " +
+			"pair with vCenter 9 and are still offered under it.",
 	}
 
 	return []map[string]any{
@@ -266,6 +284,7 @@ func mcpTools() []map[string]any {
 							"ordinary distributed-switch deployment. Omit for the five " +
 							"core products only.",
 					},
+					"generation": generation,
 				},
 				"required": []string{"pins"},
 			},
@@ -283,6 +302,7 @@ func mcpTools() []map[string]any {
 						"description":          "product key to version; pin at least two",
 						"additionalProperties": map[string]any{"type": "string"},
 					},
+					"generation": generation,
 				},
 				"required": []string{"pins"},
 			},
@@ -298,6 +318,7 @@ func mcpTools() []map[string]any {
 					"product":     product,
 					"version":     map[string]any{"type": "string"},
 					"hidePatches": map[string]any{"type": "boolean"},
+					"generation":  generation,
 				},
 				"required": []string{"product", "version"},
 			},
@@ -314,6 +335,7 @@ func mcpTools() []map[string]any {
 						"type":        "boolean",
 						"description": "include releases past General Support",
 					},
+					"generation": generation,
 				},
 				"required": []string{"product"},
 			},
@@ -353,6 +375,7 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 		Patches     bool              `json:"patches"` // accepted and ignored: now the default
 		Legacy      bool              `json:"legacy"`
 		Include     []string          `json:"include"`
+		Generation  int               `json:"generation"`
 	}
 	if len(params.Arguments) > 0 {
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
@@ -365,7 +388,12 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 		return toolResult(map[string]any{"model": modelJSON(coverageFromCache())})
 	}
 
-	gr, err := s.loadGraph()
+	if !model.KnownGeneration(args.Generation) {
+		return toolError(fmt.Sprintf("unknown generation %d (want one of %s, or omit for all)",
+			args.Generation, generationList()))
+	}
+
+	gr, err := s.loadGraph(args.Generation)
 	if err != nil {
 		return toolError(classify(err).Message)
 	}
@@ -464,7 +492,7 @@ func resolveNamedPins(gr *graph.Graph, pins map[string]string) (map[int]*graph.R
 // loadGraph keeps one cache handle and one parsed graph for the life of the process,
 // reloading only when the cache's timestamp moves — an agent may ask dozens of questions
 // in a session, and reparsing the whole matrix for each would be wasteful.
-func (s *mcpServer) loadGraph() (*graph.Graph, error) {
+func (s *mcpServer) loadGraph(generation int) (*graph.Graph, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -482,14 +510,21 @@ func (s *mcpServer) loadGraph() (*graph.Graph, error) {
 	if at.IsZero() {
 		return nil, fmt.Errorf("no cached data yet — run `vkstack refresh` first")
 	}
-	if s.graph != nil && s.graph.FetchedAt == at.UnixMilli() {
-		return s.graph, nil
+	// A refresh invalidates every generation at once: they are all views of one cache.
+	if at.UnixMilli() != s.fetchedAt {
+		s.graphs, s.fetchedAt = nil, at.UnixMilli()
 	}
-	loaded, err := loadGraphFrom(s.db)
+	if g, ok := s.graphs[generation]; ok {
+		return g, nil
+	}
+	loaded, err := loadGraphFrom(s.db, generation)
 	if err != nil {
 		return nil, err
 	}
-	s.graph = loaded
+	if s.graphs == nil {
+		s.graphs = map[int]*graph.Graph{}
+	}
+	s.graphs[generation] = loaded
 	return loaded, nil
 }
 

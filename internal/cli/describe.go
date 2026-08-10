@@ -75,7 +75,22 @@ func surface() map[string]any {
 		},
 		"productKeys":         keys,
 		"optionalProductKeys": optionalKeys(),
+		// Flags that apply to every command that reads the cache, rather than to one.
+		"globalFlags": map[string]string{
+			"--all-versions": "ignore the supported-version floor of vCenter/ESX 8.0U3",
+			"--min-version":  "move one product's floor, e.g. --min-version vcenter=9.0.0.0",
+			"--generation": "restrict to one vSphere platform generation by vCenter major, " +
+				"e.g. --generation 9. One of " + generationList() + ", or omit for all.",
+			"--cache": "path to the local cache",
+		},
 		"concepts": map[string]any{
+			"generations": "A generation names a vCenter major version and constrains " +
+				"vCenter alone. Every other component crosses the line in the published " +
+				"data — ESX 8.x pairs with vCenter 9 in hundreds of rows, NSX 4.x has more " +
+				"compatible vCenter 9 pairs than NSX 9.x does, the Supervisor's vsc0 train " +
+				"serves both, and Avi 31.x spans them. So the rest are kept or dropped by " +
+				"whether they can still reach a surviving vCenter, and anything that " +
+				"genuinely works with both generations is offered under both.",
 			"dependencyChain": []string{"vcenter", "esx", "supervisor", "vks", "vkr"},
 			"upgradeOrder":    model.UpgradeOrder(),
 			"optionalProducts": "NSX and Avi are absent from a solved stack unless pinned " +

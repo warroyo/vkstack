@@ -8,6 +8,8 @@
 // is reviewable and expected to be corrected in place.
 package model
 
+import "slices"
+
 // Scheme selects how a product's version strings are parsed and ordered.
 type Scheme string
 
@@ -103,6 +105,27 @@ var Products = []Product{
 		Scheme: SchemeGeneric, Example: "1.36.1",
 		K8sMinorRun: 0, UpgradeOrder: 7,
 	},
+}
+
+// Generations are the vSphere platform generations offered as a filter, newest first,
+// named by the vCenter major version.
+//
+// A generation is a statement about vCenter and nothing else. Every other product spans
+// both in the published data — NSX 4.x has more compatible vCenter 9 pairs than NSX 9.x
+// does, ESX 8.x pairs with vCenter 9 in the hundreds, and Supervisor's vsc0 train, VKS,
+// VKr and Avi all cross the line. Filtering any of them by their own major would delete
+// compatibility upstream actually publishes, so the filter constrains vCenter and lets
+// everything else fall out by whether it can still reach one.
+//
+// Fixed here rather than derived from the cache so the static build always writes a known
+// number of bundles. A vCenter 10 is a one-line change, and TestGenerationsCoverCache
+// fails until it is made.
+var Generations = []int{9, 8}
+
+// KnownGeneration reports whether gen names a generation the filter offers. Zero means
+// every generation and is always valid.
+func KnownGeneration(gen int) bool {
+	return gen == 0 || slices.Contains(Generations, gen)
 }
 
 // Evidence records how a relationship is known, so the explainer can never present an

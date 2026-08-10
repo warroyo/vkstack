@@ -24,6 +24,16 @@ const state = {
   // and Avi in front of a distributed switch with no NSX anywhere is an ordinary
   // deployment. Nothing here may ever open one because the other is open.
   include: [],
+  // The vSphere platform generation on show, as a vCenter major version. 0 is every
+  // generation. Unlike hideLegacy and filter below it, this is not a view filter: it is a
+  // load-time one, so changing it re-asks the server.
+  //
+  // A generation constrains vCenter and nothing else. ESX 8.x, NSX 4.x, Avi 31.x and the
+  // Supervisor vsc0 train all pair with vCenter 9 in the published matrix, so they stay on
+  // offer under it — filtering them by their own version number would hide compatibility
+  // upstream actually publishes.
+  generation: 0,
+  generations: [],    // the generations the server offers, for the tabs
 };
 
 const isOpen = (layer) => !layer.optional || state.include.includes(layer.key);
@@ -43,6 +53,13 @@ function openLayer(key) {
 const OPTIONAL_ORDER = ["nsx", "avi"];
 const withParam = () =>
   OPTIONAL_ORDER.filter((k) => state.include.includes(k)).join(",");
+
+// genParam is the generation as the API and the bundle names spell it: "" for all.
+const genParam = () => (state.generation ? String(state.generation) : "");
+
+// GENERATION_LABELS name the tabs. The server sends the list of majors; only the wording
+// lives here, and an unlisted major still gets a usable tab.
+const generationLabel = (gen) => (gen ? `vSphere ${gen}` : "All");
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const svgEl = (tag, attrs = {}, text = null) => {
@@ -75,44 +92,52 @@ const el = (tag, attrs = {}, ...kids) => {
 // by the same handlers that would have answered over HTTP, and shipped as one bundle, so
 // selecting a version is a lookup rather than a round trip. `vkstack static` sets the
 // flag; `vkstack serve` leaves it unset and the requests below are real.
-// One bundle per set of open optional layers, fetched on demand and kept once fetched.
+// One bundle per set of open optional layers per generation, fetched on demand and kept
+// once fetched.
 //
-// Opening NSX or Avi changes every answer on the map, so the four states cannot share a
-// file. Splitting them means the first load carries only the plain map: `layers` is three
-// quarters of the bytes and most readers never open either layer, so they should not
-// download or parse the other three states to find that out.
+// Opening NSX or Avi changes every answer on the map, and so does picking a generation, so
+// the states cannot share a file. Splitting them means the first load carries only the
+// plain map: `layers` is three quarters of the bytes, most readers never open either
+// layer, and nobody reads two generations at once.
 const bundles = new Map();
 
-function bundleName(withKey) {
-  return withKey ? `data-${withKey.replace(/,/g, "-")}.json` : "data.json";
+function bundleName(withKey, genKey) {
+  let name = "data";
+  if (withKey) name += `-${withKey.replace(/,/g, "-")}`;
+  if (genKey) name += `-gen${genKey}`;
+  return `${name}.json`;
 }
 
-function siteData(withKey = "") {
-  if (!bundles.has(withKey)) {
-    const name = bundleName(withKey);
-    bundles.set(withKey, fetch(name).then((res) => {
+function siteData(withKey = "", genKey = "") {
+  const cacheKey = `${withKey}|${genKey}`;
+  if (!bundles.has(cacheKey)) {
+    const name = bundleName(withKey, genKey);
+    bundles.set(cacheKey, fetch(name).then((res) => {
       if (!res.ok) throw new Error(`could not load the site data (${name}: ${res.status})`);
       return res.json();
     }));
   }
-  return bundles.get(withKey);
+  return bundles.get(cacheKey);
 }
 
 async function apiStatic(path) {
   const url = new URL(path, location.href);
+  // The generation picks the bundle just as `with` does: it is a load-time filter, so a
+  // vSphere 9 map is a different set of answers rather than a subset of one.
+  const genKey = url.searchParams.get("gen") || "";
 
   switch (url.pathname) {
     case "/api/meta":
-      // meta and the default map live only in the base bundle; the variants carry
-      // nothing the page needs before a layer is opened.
-      return (await siteData()).meta;
+      // meta and the default map live only in each generation's base bundle; the variants
+      // carry nothing the page needs before a layer is opened.
+      return (await siteData("", genKey)).meta;
     case "/api/stackmap": {
       const product = url.searchParams.get("product");
       const version = url.searchParams.get("version");
       // Which optional layers are open picks the bundle, because it changes the whole
       // answer — which nodes are lit and how each is narrowed, not only the recommendation.
       const withKey = url.searchParams.get("with") || "";
-      const data = await siteData(withKey);
+      const data = await siteData(withKey, genKey);
 
       const answer = !product || !version
         ? data.stackmaps?.[""]?.[""]
@@ -120,9 +145,9 @@ async function apiStatic(path) {
       // Only reachable if the bundle and the UI disagree about what is clickable, which
       // means the build is stale rather than the selection being wrong.
       if (!answer) {
-        if (!product || !version) return (await siteData()).stackmap;
+        if (!product || !version) return (await siteData("", genKey)).stackmap;
         throw new Error(`this build has no answer for ${product} ${version}` +
-          (withKey ? ` with ${withKey}` : ""));
+          (withKey ? ` with ${withKey}` : "") + (genKey ? ` under vSphere ${genKey}` : ""));
       }
       return answer;
     }
@@ -156,6 +181,9 @@ async function loadStack() {
   // row is asking which NSX version goes with their selection, and the recommended stack
   // has to answer that rather than stay silent about it.
   if (withParam()) params.set("with", withParam());
+  // The generation has to reach the solver, not just the renderer: under vSphere 9 the
+  // lit set still includes ESX 8.x, which hiding 8.x in the browser would wrongly drop.
+  if (genParam()) params.set("gen", genParam());
   const query = params.toString();
   const url = "/api/stackmap" + (query ? "?" + query : "");
 
@@ -168,12 +196,12 @@ async function loadStack() {
   try {
     data = await api(url);
   } catch (err) {
-    if (ticket !== inFlight) return;
+    if (ticket !== inFlight) return false;
     $("#map").classList.remove("is-solving");
     showStackError(err.message);
-    return;
+    return false;
   }
-  if (ticket !== inFlight) return; // a newer click has already been asked
+  if (ticket !== inFlight) return false; // a newer click has already been asked
   $("#map").classList.remove("is-solving");
   $("#stack-error").classList.add("hidden");
 
@@ -201,6 +229,9 @@ async function loadStack() {
   renderStrata();
   renderPinControls();
   renderRecommended();
+  // Reported so a caller that changed a load-time filter can tell a solve that failed
+  // because of it from one that succeeded. setGeneration is the only such caller.
+  return true;
 }
 
 // showStackError reports a failed solve and, when the pin caused it, offers the way out.
@@ -239,6 +270,150 @@ const MAP = {
   charW: 7.4,     // approximate width of one monospace character at 12.5px
 };
 
+// --- the viewport -----------------------------------------------------------
+//
+// The layout above computes one true set of positions, in world coordinates, and never
+// thinks about the window. This decides how much of that drawing is on screen.
+//
+// It exists because the widest row is as wide as the number of versions in it: unfiltered,
+// the vCenter row is 22 nodes and about 2000px, against a map column nearer 1000px beside
+// the rail. That used to be absorbed by `overflow-x: auto`, which scrolls but cannot show
+// you the shape of the thing — and the shape is the answer.
+//
+// k is scale: 1 means one world unit per CSS pixel, which is what the layout was tuned
+// for. x and y are the world coordinates of the viewport's top-left corner.
+const view = { x: 0, y: 0, k: 1, dirty: false };
+
+// world is the last laid-out size, kept so the wheel, the buttons and a window resize can
+// all recompute the viewBox without re-running the layout.
+let world = { w: 0, h: 0 };
+
+const ZOOM_MAX = 3;
+const ZOOM_STEP = 1.2;
+
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+
+// fitScale is the scale at which the whole drawing fits the frame's width. Capped at 1:
+// a map narrower than its frame is drawn at its natural size and centred, never blown up.
+function fitScale() {
+  const frameW = $("#map").clientWidth;
+  if (!frameW || !world.w) return 1;
+  return Math.min(1, frameW / world.w);
+}
+
+// Zooming out past the fit would only add empty space around a map already fully visible.
+const minScale = () => Math.min(1, fitScale());
+
+// applyView writes the current viewport onto the SVG.
+//
+// The element's own height shrinks with the scale so a fitted map does not sit in a box
+// sized for a drawing three times larger, but never grows past the natural height: zooming
+// in reveals less of the map rather than making the page taller.
+function applyView() {
+  if (!mapDOM.svg || !world.w) return;
+  const frameW = $("#map").clientWidth || world.w;
+
+  view.k = clamp(view.k, minScale(), ZOOM_MAX);
+  const viewportH = world.h * Math.min(1, view.k);
+  const boxW = frameW / view.k;
+  const boxH = viewportH / view.k;
+
+  // Clamped so panning cannot wander off the drawing. When the viewport is larger than
+  // the world on an axis, the world is centred on it instead.
+  view.x = boxW >= world.w ? (world.w - boxW) / 2 : clamp(view.x, 0, world.w - boxW);
+  view.y = boxH >= world.h ? (world.h - boxH) / 2 : clamp(view.y, 0, world.h - boxH);
+
+  mapDOM.svg.setAttribute("viewBox", `${view.x} ${view.y} ${boxW} ${boxH}`);
+  mapDOM.svg.setAttribute("height", viewportH);
+  mapDOM.svg.classList.toggle("is-pannable", boxW < world.w || boxH < world.h);
+  renderMapControls();
+}
+
+// fitView shows the whole drawing. Called on every render until the reader takes over.
+function fitView() {
+  view.k = fitScale();
+  view.x = 0;
+  view.y = 0;
+  applyView();
+}
+
+// resetView returns to 1:1, which is the size every label was measured for.
+function resetView() {
+  view.k = 1;
+  view.dirty = false;
+  view.x = 0;
+  view.y = 0;
+  applyView();
+}
+
+// zoomAbout scales around a fixed point in world coordinates, so the thing under the
+// pointer stays under the pointer.
+function zoomAbout(worldX, worldY, factor) {
+  const frameW = $("#map").clientWidth || world.w;
+  const before = { w: frameW / view.k, h: (world.h * Math.min(1, view.k)) / view.k };
+  view.k = clamp(view.k * factor, minScale(), ZOOM_MAX);
+  const after = { w: frameW / view.k, h: (world.h * Math.min(1, view.k)) / view.k };
+
+  // Keep the fraction of the way across the viewport that the point sat at.
+  const fx = before.w ? (worldX - view.x) / before.w : 0.5;
+  const fy = before.h ? (worldY - view.y) / before.h : 0.5;
+  view.x = worldX - fx * after.w;
+  view.y = worldY - fy * after.h;
+  view.dirty = true;
+  applyView();
+}
+
+// zoomBy zooms about the middle of the viewport, for the buttons and the keyboard.
+function zoomBy(factor) {
+  const frameW = $("#map").clientWidth || world.w;
+  const boxW = frameW / view.k;
+  const boxH = (world.h * Math.min(1, view.k)) / view.k;
+  zoomAbout(view.x + boxW / 2, view.y + boxH / 2, factor);
+}
+
+// pointToWorld converts a pointer position into world coordinates through the SVG's own
+// transform, so it stays correct whatever the viewBox currently is.
+function pointToWorld(ev) {
+  const svg = mapDOM.svg;
+  const ctm = svg?.getScreenCTM();
+  if (!ctm) return null;
+  const pt = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
+  return { x: pt.x, y: pt.y };
+}
+
+// panIntoView scrolls a world-space box into the viewport. Tabbing between nodes relies
+// on it: a viewBox is not a scroll offset, so the browser's own scroll-into-view has
+// nothing to move, and a focused node off the left edge would simply never be seen.
+function panIntoView(box) {
+  if (!mapDOM.svg || !world.w) return;
+  const frameW = $("#map").clientWidth || world.w;
+  const boxW = frameW / view.k;
+  const boxH = (world.h * Math.min(1, view.k)) / view.k;
+  const pad = 24;
+
+  let { x, y } = view;
+  if (box.x - pad < x) x = box.x - pad;
+  else if (box.x + box.w + pad > x + boxW) x = box.x + box.w + pad - boxW;
+  if (box.y - pad < y) y = box.y - pad;
+  else if (box.y + box.h + pad > y + boxH) y = box.y + box.h + pad - boxH;
+
+  if (x === view.x && y === view.y) return;
+  view.x = x;
+  view.y = y;
+  applyView();
+}
+
+function renderMapControls() {
+  const controls = $("#map-controls");
+  if (!controls) return;
+  const showing = !!mapDOM.svg && world.w > 0;
+  controls.hidden = !showing;
+  if (!showing) return;
+  $("#map-zoom-level").textContent = `${Math.round(view.k * 100)}%`;
+  $("#map-zoom-in").disabled = view.k >= ZOOM_MAX - 0.001;
+  $("#map-zoom-out").disabled = view.k <= minScale() + 0.001;
+}
+
 // The map is reconciled, not rebuilt.
 //
 // Wiping the SVG on every click destroyed the one thing a reader most wants to see: what
@@ -264,6 +439,11 @@ function resetMap() {
   mapDOM.nodes.clear();
   mapDOM.edges.clear();
   $("#map").textContent = "";
+  // There is no drawing to zoom, so the controls go with it — and the next map that
+  // arrives should fit itself rather than inherit a zoom set on a different drawing.
+  world = { w: 0, h: 0 };
+  view.dirty = false;
+  renderMapControls();
 }
 
 function renderMap() {
@@ -358,19 +538,105 @@ function renderMap() {
 
 // ensureSVG creates the drawing once and only resizes it afterwards, so everything inside
 // survives from one selection to the next.
+//
+// The element is always the full width of its frame; what changes with the reader's
+// selection is the world, and what changes with the reader's zoom is the viewBox. Width
+// used to be pinned to the world size, which made the drawing permanently 1:1 and left
+// `overflow-x: auto` as the only way to see a wide row.
 function ensureSVG(host, width, height) {
   if (!mapDOM.svg) {
     host.textContent = "";
-    mapDOM.svg = svgEl("svg", { class: "map-svg", role: "presentation" });
+    mapDOM.svg = svgEl("svg", {
+      class: "map-svg", role: "presentation",
+      preserveAspectRatio: "xMidYMid meet",
+    });
     mapDOM.links = svgEl("g", { class: "map-links" });     // under the nodes
     mapDOM.labels = svgEl("g", { class: "map-labels" });
     mapDOM.svg.append(mapDOM.links, mapDOM.labels);
     host.append(mapDOM.svg);
+    bindMapViewport();
   }
-  mapDOM.svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  mapDOM.svg.setAttribute("width", width);
-  mapDOM.svg.setAttribute("height", height);
+  mapDOM.svg.setAttribute("width", "100%");
+
+  world = { w: width, h: height };
+  // Every selection re-fits, until the reader takes the view somewhere themselves —
+  // snapping their zoom back on each click would make the map unusable at exactly the
+  // moment they were reading it closely. Reset gives the automatic fit back.
+  if (view.dirty) applyView();
+  else fitView();
   return mapDOM.svg;
+}
+
+// bindMapViewport wires zoom and pan, once, to the drawing that outlives every render.
+//
+// A plain wheel is deliberately left alone. Hijacking it to zoom traps the page: a reader
+// scrolling down to the version lists would instead scale the map and never get past it.
+// ctrl/⌘+wheel is the browser's own zoom gesture and is what a trackpad pinch sends, so
+// that is the one taken — with the buttons carrying discoverability for everyone else.
+function bindMapViewport() {
+  const svg = mapDOM.svg;
+
+  svg.addEventListener("wheel", (ev) => {
+    if (!ev.ctrlKey && !ev.metaKey) return; // let the page scroll
+    ev.preventDefault();
+    const at = pointToWorld(ev);
+    if (at) zoomAbout(at.x, at.y, ev.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
+  }, { passive: false });
+
+  // A pan ends with a click the browser fires anyway. Swallowing it with a one-shot
+  // listener leaks: a drag released outside the drawing may produce no click at all, and
+  // the listener would then eat the next real one. A timestamp cannot leak.
+  let swallowClickUntil = 0;
+  svg.addEventListener("click", (ev) => {
+    if (performance.now() > swallowClickUntil) return;
+    swallowClickUntil = 0;
+    ev.stopPropagation();
+    ev.preventDefault();
+  }, { capture: true });
+
+  // Drag to pan, but only past a threshold: a click on a node has to stay a click, and a
+  // few pixels of pointer travel during one is normal.
+  let drag = null;
+  svg.addEventListener("pointerdown", (ev) => {
+    if (ev.button !== 0) return;
+    const at = pointToWorld(ev);
+    if (!at) return;
+    drag = { from: at, origin: { x: view.x, y: view.y }, moved: false, id: ev.pointerId };
+  });
+
+  svg.addEventListener("pointermove", (ev) => {
+    if (!drag || ev.pointerId !== drag.id) return;
+    const at = pointToWorld(ev);
+    if (!at) return;
+    // Measured against the drag's own start point in world units, which already accounts
+    // for the current scale.
+    const dx = at.x - drag.from.x;
+    const dy = at.y - drag.from.y;
+    if (!drag.moved && Math.abs(dx) * view.k < 4 && Math.abs(dy) * view.k < 4) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      svg.setPointerCapture(drag.id);
+      svg.classList.add("is-panning");
+      hidePeek(true);
+    }
+    view.x = drag.origin.x - dx;
+    view.y = drag.origin.y - dy;
+    view.dirty = true;
+    applyView();
+  });
+
+  const endDrag = (ev) => {
+    if (!drag || ev.pointerId !== drag.id) return;
+    if (drag.moved) {
+      svg.releasePointerCapture(drag.id);
+      svg.classList.remove("is-panning");
+      // Arm the swallow above, so this pan does not also pin a version.
+      swallowClickUntil = performance.now() + 300;
+    }
+    drag = null;
+  };
+  svg.addEventListener("pointerup", endDrag);
+  svg.addEventListener("pointercancel", endDrag);
 }
 
 function reconcileLabels(rows, height) {
@@ -562,7 +828,18 @@ function bindMapNode(g, layer, node) {
     }
   };
   g.onmouseenter = () => { showPeek(g, layer, node); traceNode(node.id); };
-  g.onfocus = () => { showPeek(g, layer, node); traceNode(node.id); };
+  g.onfocus = () => {
+    // Tabbing has to bring the node with it. The viewBox is not a scroll offset, so the
+    // browser's own scroll-into-view has nothing to move and a node off the edge of the
+    // viewport would take focus while staying invisible.
+    panIntoView({
+      x: Number(g.dataset.x), y: Number(g.dataset.y),
+      w: Number(g.querySelector(".map-node-box")?.getAttribute("width")) || 0,
+      h: MAP.nodeH,
+    });
+    showPeek(g, layer, node);
+    traceNode(node.id);
+  };
   g.onmouseleave = () => { hidePeek(); clearTrace(); };
   g.onblur = () => { hidePeek(); clearTrace(); };
 }
@@ -874,6 +1151,9 @@ function currentURL() {
   // Which optional layers are open travels with the link, so a URL shared as "here is
   // the Avi-only view" comes back as the Avi-only view.
   if (withParam()) params.set("with", withParam());
+  // The generation travels with the link too: "here is the vSphere 9 view" has to come
+  // back as the vSphere 9 view, not as every generation with a 9 pinned.
+  if (genParam()) params.set("gen", genParam());
   const query = params.toString();
   return location.pathname + (query ? "?" + query : "");
 }
@@ -893,7 +1173,7 @@ function syncURL(push) {
 function readState() {
   return {
     pin: state.pin, hideLegacy: state.hideLegacy, view: state.view,
-    include: state.include,
+    include: state.include, generation: state.generation,
   };
 }
 
@@ -913,19 +1193,118 @@ function applyURL() {
   const asked = (params.get("with") || "")
     .split(",").map((k) => k.trim().toLowerCase()).filter(Boolean);
   state.include = OPTIONAL_ORDER.filter((k) => asked.includes(k));
+  // Same treatment for the generation: a value the build does not offer widens to All
+  // rather than erroring, so an old link still shows a map. state.generations is empty
+  // until meta lands, so the first read trusts the number and renderGenerations corrects
+  // it once the server's list is in.
+  state.generation = readGeneration(params.get("gen"));
   // A `with` that resolved to nothing did not ask for anything. Counting it anyway
   // suppressed both the saved stack and the default vCenter pin, so `?with=` on its own
   // opened the app on a blank map.
   return params.has("product") || params.has("legacy") ||
-         params.has("view") || state.include.length > 0;
+         params.has("view") || state.include.length > 0 || state.generation !== 0;
+}
+
+// readGeneration parses the `gen` parameter, falling back to every generation.
+function readGeneration(raw) {
+  const gen = Number.parseInt(raw ?? "", 10);
+  if (!Number.isInteger(gen) || gen <= 0) return 0;
+  // Before meta lands there is no list to check against, so an unknown-but-plausible
+  // number is allowed through and settled by renderGenerations.
+  if (state.generations.length > 0 && !state.generations.includes(gen)) return 0;
+  return gen;
 }
 
 window.addEventListener("popstate", () => {
   restoring = true;
   applyURL();
   showView(state.view);
+  // Back across a generation change has to move the tabs and the manifest with it, not
+  // only the map.
+  renderGenerations();
+  reloadMeta();
   loadStack().finally(() => { restoring = false; });
 });
+
+// --- the generation picker --------------------------------------------------
+//
+// A generation is a statement about vCenter alone. Under vSphere 9 the map still offers
+// ESX 8.x, NSX 4.x, Avi 31.x and the Supervisor vsc0 train, because upstream publishes all
+// of them against vCenter 9 — in NSX's case more compatible pairs than NSX 9.x manages.
+// Filtering each layer by its own major would read tidier and be wrong.
+
+// metaPath asks for the manifest belonging to the current generation. Release counts
+// narrow with the filter, so a shared manifest would contradict the map beside it.
+function metaPath() {
+  return "/api/meta" + (genParam() ? `?gen=${genParam()}` : "");
+}
+
+// loadMeta fetches the manifest, widening to every generation if the one asked for has no
+// bundle at all. On a static build that is a 404 for a file the site never wrote, which
+// would otherwise leave the page with no manifest and no tabs to escape with.
+async function loadMeta() {
+  try {
+    return await api(metaPath());
+  } catch (err) {
+    if (!state.generation) throw err;
+    state.generation = 0;
+    syncURL(false);
+    return api(metaPath());
+  }
+}
+
+async function reloadMeta() {
+  try {
+    const meta = await api(metaPath());
+    state.meta = meta;
+    renderMeta(meta);
+  } catch (err) {
+    $("#meta").textContent = err.message;
+  }
+}
+
+function renderGenerations() {
+  const host = $("#generations");
+  if (!host) return;
+  host.textContent = "";
+  // Nothing to choose between until the server says what it offers.
+  if (state.generations.length === 0) return;
+
+  for (const gen of [0, ...state.generations]) {
+    const active = gen === state.generation;
+    host.append(el("button", {
+      type: "button",
+      class: "segment" + (active ? " is-active" : ""),
+      "aria-pressed": String(active),
+      title: gen
+        ? `Only stacks built on vCenter ${gen}.x. Older ESX, NSX and Avi releases that ` +
+          `pair with it are still offered.`
+        : "Every generation.",
+      onclick: () => setGeneration(gen),
+    }, generationLabel(gen)));
+  }
+}
+
+// setGeneration switches generation and re-asks the server.
+//
+// The pin is kept when it survives the switch and dropped when it does not. A vCenter 8
+// pin cannot exist under vSphere 9 at all, and a line on any other layer can disappear
+// too once it can no longer reach a vCenter in range — so rather than predict which,
+// this tries the pin and falls back to the unpinned map for that generation.
+async function setGeneration(gen) {
+  if (gen === state.generation) return;
+  state.generation = gen;
+  renderGenerations();
+  syncURL(true); // a generation change is a real step, so back returns to the last one
+
+  const metaDone = reloadMeta();
+  if (!(await loadStack()) && state.pin) {
+    state.pin = null;
+    syncURL(false);
+    await loadStack();
+  }
+  await metaDone;
+}
 
 function renderPinControls() {
   const label = $("#pin-label");
@@ -1455,6 +1834,13 @@ function showView(name) {
   // The tab is a personal habit rather than part of the view being pointed at, so it is
   // remembered here and only reaches a link when it is not the default.
   localStorage.setItem("vkstack.view", name);
+
+  // A hidden element has no width, so a map laid out while the usage tab was showing was
+  // fitted against a frame of zero. Re-fit on the way back, now that there is a frame.
+  if (name === "stack" && mapDOM.svg && world.w) {
+    if (view.dirty) applyView();
+    else fitView();
+  }
 }
 
 for (const btn of document.querySelectorAll("#tabs button")) {
@@ -1499,19 +1885,33 @@ function setMyStack(pin) {
 
 async function boot() {
   renderRailPlaceholder();
-  try {
-    const meta = await api("/api/meta");
-    // Kept, not just printed: the manifest has to stamp which snapshot it came from.
-    state.meta = meta;
-    renderMeta(meta);
-  } catch (err) {
-    $("#meta").textContent = err.message;
-  }
 
   // The URL is a more specific instruction than any default, so it is read first. Then
   // this browser's own stack, if one was saved. Only failing both does the map fall back
   // to the newest base version, so an arrival is never an empty frame.
+  //
+  // It is also read before the manifest, because it names the generation and the manifest
+  // answers for one: per-product release counts narrow with the filter.
   const fromURL = applyURL();
+
+  try {
+    // Kept, not just printed: the manifest has to stamp which snapshot it came from.
+    state.meta = await loadMeta();
+    state.generations = Array.isArray(state.meta.generations) ? state.meta.generations : [];
+    // Settle a generation the link asked for that this build does not offer. applyURL let
+    // it through because the list had not arrived yet, and a served instance answers such
+    // a request by widening rather than by failing.
+    if (state.generation && !state.generations.includes(state.generation)) {
+      state.generation = 0;
+      state.meta = await api(metaPath());
+      syncURL(false);
+    }
+    renderGenerations();
+    renderMeta(state.meta);
+  } catch (err) {
+    $("#meta").textContent = err.message;
+  }
+
   showView(fromURL ? state.view : (localStorage.getItem("vkstack.view") || "stack"));
   if (!state.pin && !fromURL) state.pin = myStack();
 
@@ -1545,6 +1945,55 @@ $("#filter").addEventListener("input", (ev) => {
   state.filter = ev.target.value.trim().toLowerCase();
   renderStrata();
 });
+
+$("#map-zoom-in").addEventListener("click", () => zoomBy(ZOOM_STEP));
+$("#map-zoom-out").addEventListener("click", () => zoomBy(1 / ZOOM_STEP));
+$("#map-fit").addEventListener("click", () => { view.dirty = true; fitView(); });
+// Reset clears the flag as well as the numbers, so the map goes back to fitting itself
+// on every selection rather than holding whatever the reader last set.
+$("#map-reset").addEventListener("click", resetView);
+
+// Panning and zooming from the keyboard, for anyone not using a pointer. The handler is
+// on the frame rather than the SVG because the SVG is replaced whenever the map empties.
+$("#map").addEventListener("keydown", (ev) => {
+  if (ev.target !== ev.currentTarget) return; // a node has focus; leave its keys alone
+  if (!mapDOM.svg || !world.w) return;
+  const step = 60 / view.k;
+  switch (ev.key) {
+    case "ArrowLeft":  view.x -= step; break;
+    case "ArrowRight": view.x += step; break;
+    case "ArrowUp":    view.y -= step; break;
+    case "ArrowDown":  view.y += step; break;
+    case "+": case "=": zoomBy(ZOOM_STEP); ev.preventDefault(); return;
+    case "-": case "_": zoomBy(1 / ZOOM_STEP); ev.preventDefault(); return;
+    case "0": resetView(); ev.preventDefault(); return;
+    default: return;
+  }
+  ev.preventDefault();
+  view.dirty = true;
+  applyView();
+});
+
+// A narrower window means a different fit. Only the untouched view follows it: recomputing
+// over a zoom the reader set would undo their work on every resize.
+window.addEventListener("resize", () => {
+  if (!mapDOM.svg || !world.w) return;
+  if (view.dirty) applyView();
+  else fitView();
+});
+
+// Printing wants the whole drawing on the page, not the window onto it.
+if (window.matchMedia) {
+  const printing = window.matchMedia("print");
+  const showAll = (on) => {
+    if (!mapDOM.svg || !world.w) return;
+    if (on) mapDOM.svg.setAttribute("viewBox", `0 0 ${world.w} ${world.h}`);
+    else applyView();
+  };
+  printing.addEventListener?.("change", (ev) => showAll(ev.matches));
+  window.addEventListener("beforeprint", () => showAll(true));
+  window.addEventListener("afterprint", () => showAll(false));
+}
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
     const railShowing = railActive() && $("#peek-rail")?.querySelector(".peek-title");

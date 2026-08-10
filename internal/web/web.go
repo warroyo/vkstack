@@ -177,8 +177,8 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 
 // pinsRequest is the shared request shape: product short key -> version string.
 type pinsRequest struct {
-	Pins    map[string]string `json:"pins"`
-	Patches bool              `json:"patches"`
+	Pins        map[string]string `json:"pins"`
+	HidePatches bool              `json:"hidePatches"`
 	// Include opts optional products (NSX, Avi) into the solve, by product key. Each is
 	// independent; a pin on one is already an opt-in for that one alone.
 	Include []string `json:"include"`
@@ -237,7 +237,7 @@ func (s *Server) handleStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := graph.StackOptions{Limit: 1, IncludePatches: req.Patches, Include: req.include()}
+	opts := graph.StackOptions{Limit: 1, HidePatches: req.HidePatches, Include: req.include()}
 	stacks, failure := g.Stacks(pins, opts)
 
 	resp := map[string]any{}

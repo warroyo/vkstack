@@ -104,8 +104,9 @@ type CompatHit struct {
 
 // CompatOptions filter a compatibility lookup.
 type CompatOptions struct {
-	// IncludePatches keeps Patch-type releases, which are hidden by default.
-	IncludePatches bool
+	// HidePatches drops Patch-type releases. Off by default; see StackOptions.HidePatches
+	// for why this is the opposite of the interop site's own default.
+	HidePatches bool
 	// Statuses to include; defaults to compatible and compatible-not-tested.
 	Statuses []int
 }
@@ -128,7 +129,7 @@ func (g *Graph) CompatibleWith(r *Release, opts CompatOptions) []CompatGroup {
 		if peer == nil || !opts.allows(e.Status) {
 			continue
 		}
-		if peer.IsPatch() && !opts.IncludePatches {
+		if peer.IsPatch() && opts.HidePatches {
 			hiddenPatches[peer.ProductID]++
 			continue
 		}
@@ -158,9 +159,11 @@ func (g *Graph) CompatibleWith(r *Release, opts CompatOptions) []CompatGroup {
 
 // PairVerdict is the compatibility outcome for one product pair in a stack.
 type PairVerdict struct {
-	// Dependency is false for pairs the matrix publishes that are not real
-	// dependencies. Those are reported for reference and never enforced.
-	Dependency bool
+	// Constrains is false for pairs that are looked up but never allowed to decide a
+	// stack — whether because they are not dependencies (vCenter × VKr) or because they
+	// are dependencies whose published grid rules out nothing (ESX × NSX). See
+	// model.Constrains.
+	Constrains bool
 	A, B       model.Product
 	ARelease   *Release
 	BRelease   *Release
@@ -176,9 +179,6 @@ type PairVerdict struct {
 // OK reports whether this pair is a verified yes.
 func (v PairVerdict) OK() bool { return v.Published && v.HasEdge && Compatible(v.Status) }
 
-// Enforced reports whether this pair can invalidate a stack.
-func (v PairVerdict) Enforced() bool { return v.Dependency }
-
 // Unverified reports whether this pair could not be checked, as opposed to failing.
 func (v PairVerdict) Unverified() bool { return !v.Published || !v.HasEdge }
 
@@ -187,21 +187,21 @@ type CheckResult struct {
 	Pairs []PairVerdict
 }
 
-// Incompatible returns the dependency pairs that actively fail.
+// Incompatible returns the constraining pairs that actively fail.
 //
-// Non-dependency pairs are excluded: vCenter against VKS is published but VKS does not
-// run on vCenter, so a mismatch there says nothing about whether the stack works.
+// Pairs outside the constraint set are excluded: vCenter against VKS is published but VKS
+// does not run on vCenter, so a mismatch there says nothing about whether the stack works.
 func (c CheckResult) Incompatible() []PairVerdict {
 	var out []PairVerdict
 	for _, p := range c.Pairs {
-		if p.Dependency && !p.Unverified() && !Compatible(p.Status) {
+		if p.Constrains && !p.Unverified() && !Compatible(p.Status) {
 			out = append(out, p)
 		}
 	}
 	return out
 }
 
-// Blocking returns the dependency pairs that cannot appear in one stack.
+// Blocking returns the constraining pairs that cannot appear in one stack.
 //
 // This is stricter than Incompatible, and deliberately: inside a pair upstream publishes,
 // a missing cell is the matrix declining to list the two releases together, not an open
@@ -215,19 +215,19 @@ func (c CheckResult) Incompatible() []PairVerdict {
 func (c CheckResult) Blocking() []PairVerdict {
 	var out []PairVerdict
 	for _, p := range c.Pairs {
-		if p.Dependency && p.Published && (!p.HasEdge || !Compatible(p.Status)) {
+		if p.Constrains && p.Published && (!p.HasEdge || !Compatible(p.Status)) {
 			out = append(out, p)
 		}
 	}
 	return out
 }
 
-// Informational returns published pairs that are not dependencies, with their status.
-// Worth showing, never worth failing on.
+// Informational returns published pairs outside the constraint set, with their status.
+// Worth showing when the caller named the combination, never worth failing on.
 func (c CheckResult) Informational() []PairVerdict {
 	var out []PairVerdict
 	for _, p := range c.Pairs {
-		if !p.Dependency && !p.Unverified() {
+		if !p.Constrains && !p.Unverified() {
 			out = append(out, p)
 		}
 	}
@@ -238,7 +238,7 @@ func (c CheckResult) Informational() []PairVerdict {
 func (c CheckResult) Unverified() []PairVerdict {
 	var out []PairVerdict
 	for _, p := range c.Pairs {
-		if p.Dependency && p.Unverified() {
+		if p.Constrains && p.Unverified() {
 			out = append(out, p)
 		}
 	}
@@ -264,7 +264,7 @@ func (g *Graph) Check(pins map[int]*Release) CheckResult {
 		v := PairVerdict{
 			A: pa, B: pb, ARelease: ra, BRelease: rb,
 			Published:  g.Published(a, b),
-			Dependency: model.IsDependency(a, b),
+			Constrains: model.Constrains(a, b),
 		}
 		if v.Published {
 			for _, e := range g.Compat[ra.ID] {

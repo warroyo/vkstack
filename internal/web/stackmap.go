@@ -74,6 +74,49 @@ func supervisorTrain(r *graph.Release) string {
 	return ""
 }
 
+// nodeID is the one place a release's node id is built.
+//
+// It used to be spelled out at both call sites — once when the nodes were created and
+// once when the lit set was derived from ViableOptions. They drifted, the two stopped
+// matching, and a whole layer silently fell out of the picture because nothing lit it.
+func nodeID(p model.Product, line string) string { return p.Key + ":" + line }
+
+// reachScore counts how much of the stack below a release it can actually carry.
+//
+// Builds of one version line are not interchangeable, and upstream's newest is regularly
+// its most restrictive because the compatibility grid has not been backfilled yet. NSX
+// 9.1.0.0 is published against the Supervisor 1.32 line and so reaches VKS 3.7;
+// 9.1.0.0100 and 9.1.0.0200 are not and stop at VKS 3.6. Avi 32.1.2 reaches no complete
+// stack at all while 32.1.1 does. A node that always pinned its newest member handed the
+// reader the worst build in the line — sometimes a dead end — with nothing on screen
+// saying a sibling would have worked.
+//
+// Only *downstream* peers are counted. A Supervisor build's divergence against vCenter is
+// upstream, already carried by its train label, and closes no door further along the
+// chain. Peers are counted by version line rather than by exact release, so one extra
+// published patch does not outrank a build that reaches an entire additional line.
+func reachScore(g *graph.Graph, p model.Product, r *graph.Release) int {
+	order := model.UpgradeOrder()
+	pos := make(map[string]int, len(order))
+	for i, k := range order {
+		pos[k] = i
+	}
+
+	seen := map[string]bool{}
+	for _, e := range g.Compat[r.ID] {
+		peer := g.Releases[e.Peer]
+		if peer == nil || !graph.Compatible(e.Status) {
+			continue
+		}
+		q, ok := model.ByID(peer.ProductID)
+		if !ok || !model.Constrains(p.ID, q.ID) || pos[q.Key] <= pos[p.Key] {
+			continue
+		}
+		seen[q.Key+":"+lineKey(q, peer)] = true
+	}
+	return len(seen)
+}
+
 // lineKey groups a release into the unit shown as one node.
 func lineKey(p model.Product, r *graph.Release) string {
 	switch p.Key {
@@ -121,9 +164,13 @@ type mapNode struct {
 	// sends back as a pin and what it matches the recommended stack against, so nothing
 	// may ever decorate it. Prose about a release goes in Notes.
 	Releases []string `json:"releases"`
-	// Pin is the release selected by clicking this node — the newest one it stands for.
-	// Sent explicitly so the client never has to derive a pin from a display string.
+	// Pin is the release selected by clicking this node. Sent explicitly so the client
+	// never has to derive a pin from a display string. Usually the newest release the
+	// node stands for, but not when an older one reaches further — see setPin.
 	Pin string `json:"pin,omitempty"`
+	// PinNote explains a pin that is not the newest build in the node, and is empty
+	// otherwise. Without it the choice looks arbitrary, or worse, goes unnoticed.
+	PinNote string `json:"pinNote,omitempty"`
 	// Notes are the releases rendered for a reader, one line each: where a build came
 	// from, whether it is out of General Support. Display only — never sent back, and
 	// not necessarily in Releases order, since the build a selection ships with leads.
@@ -250,7 +297,7 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for _, line := range lineOrder {
-			id := p.Key + ":" + line
+			id := nodeID(p, line)
 			members := grouped[line]
 			nodeReleases[id] = members
 
@@ -266,7 +313,7 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 				node.Releases = append(node.Releases, rel.Raw)
 			}
 			node.Notes = phaseNotes(members)
-			setPin(&node)
+			setPin(g, &node, members)
 			// Upstream publishes nothing at all for some releases — normally ones that
 			// have not shipped. That is not the same as "nothing is compatible", and it
 			// happens on every layer, not only on vCenter.
@@ -322,7 +369,7 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 		// so the lit set, the node narrowing, the provenance badges and the ESX host
 		// annotation all described a stack without the optional layers the reader had
 		// opened, while the recommendation and the edges described one with them.
-		probe := graph.StackOptions{Limit: 1, IncludePatches: true, Include: include}
+		probe := graph.StackOptions{Limit: 1, HidePatches: false, Include: include}
 
 		lit := map[string]bool{}
 		viable := map[string][]*graph.Release{}
@@ -332,7 +379,7 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			for _, rel := range rels {
-				id := p.Key + ":" + lineKey(p, rel)
+				id := nodeID(p, lineKey(p, rel))
 				lit[id] = true
 				viable[id] = append(viable[id], rel)
 			}
@@ -418,7 +465,7 @@ func narrowNodes(
 			// The surviving releases may sit in a different phase from the full line.
 			setPhase(node, rels)
 			node.Notes = phaseNotes(rels)
-			setPin(node)
+			setPin(g, node, rels)
 			setProvenance(g, node, pins, rels, probe)
 			switch {
 			case layers[li].Key == "vcenter":
@@ -444,12 +491,43 @@ func narrowNodes(
 
 // setPin records the release a click on this node selects: the newest it stands for,
 // which is the first, since every list here is newest-first.
-func setPin(node *mapNode) {
-	if len(node.Releases) > 0 {
-		node.Pin = node.Releases[0]
+// setPin chooses which release a click on this node selects.
+//
+// Not simply the newest. Members are newest-first, and the newest is picked only when
+// nothing else in the node reaches further — see reachScore for why that is a real
+// distinction rather than a tie-break. When an older build wins, the node says so, because
+// a reader who clicked "9.1" and got 9.1.0.0 is owed an explanation.
+func setPin(g *graph.Graph, node *mapNode, members []*graph.Release) {
+	if len(members) == 0 {
+		node.Pin = ""
 		return
 	}
-	node.Pin = ""
+	// Sorted here rather than trusted from the caller: this runs both over a node's full
+	// membership and over the narrowed set left by a pin, and only one of those arrives
+	// newest-first.
+	sorted := slices.Clone(members)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return version.Compare(sorted[i].Version, sorted[j].Version) > 0
+	})
+
+	best, bestScore := sorted[0], reachScore(g, modelOf(sorted[0]), sorted[0])
+	for _, r := range sorted[1:] {
+		if s := reachScore(g, modelOf(r), r); s > bestScore {
+			best, bestScore = r, s
+		}
+	}
+	node.Pin = best.Raw
+	node.PinNote = ""
+	if best.Raw != sorted[0].Raw {
+		node.PinNote = fmt.Sprintf(
+			"Selects %s rather than %s, the newest here: upstream publishes %s against more of the stack below.",
+			best.Raw, sorted[0].Raw, best.Raw)
+	}
+}
+
+func modelOf(r *graph.Release) model.Product {
+	p, _ := model.ByID(r.ProductID)
+	return p
 }
 
 // phaseNotes renders one line per release, flagging the ones that are out of General
@@ -502,7 +580,7 @@ func setProvenance(g *graph.Graph, node *mapNode, pins map[int]*graph.Release, r
 	productKey := rels[0].ProductKey
 	seen := map[string]bool{}
 	for _, v := range best.Verdicts {
-		if !v.Dependency {
+		if !v.Constrains {
 			continue // published for reference, never enforced; not this node's warrant
 		}
 		own := v.A.Key == productKey || v.B.Key == productKey
@@ -747,7 +825,7 @@ func summarizeProvenance(s graph.Stack) map[string]any {
 	verified, untested := 0, 0
 	var inferred, untestedPairs, footnotes []string
 	for _, v := range s.Verdicts {
-		if !v.Dependency {
+		if !v.Constrains {
 			continue // published for reference, never enforced
 		}
 		name := v.A.Label + " × " + v.B.Label

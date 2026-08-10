@@ -74,7 +74,8 @@ func modelJSON(covered model.Coverage) map[string]any {
 			"from": e.From, "to": e.To,
 			"label": e.Label, "summary": e.Summary, "prose": e.Prose,
 			"bidirectional": e.Bidirectional,
-			// Dependency is the field that matters most: only these constrain a stack.
+			// The key is named "dependency" for compatibility, but it reports the
+			// constraint set: ESX × NSX is a real dependency and is false here.
 			"dependency":    e.Primary,
 			"evidence":      string(e.Evidence),
 			"evidenceMeans": e.Evidence.Describe(),

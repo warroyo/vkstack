@@ -93,7 +93,7 @@ func statusWord(status int) string {
 }
 
 func newReleasesCmd() *cobra.Command {
-	var patches, legacy bool
+	var hidePatches, patches, legacy bool
 	cmd := &cobra.Command{
 		Use:   "releases <product>",
 		Short: "List a product's releases, oldest first",
@@ -107,11 +107,11 @@ func newReleasesCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("unknown product %q", args[0])
 			}
-			// Filter before rendering so --patches applies to every output format,
-			// not just the table.
+			// Filter before rendering so --hide-patches applies to every output
+			// format, not just the table.
 			var releases []*graph.Release
 			for _, r := range gr.ReleasesOf(p.ID) {
-				if r.IsPatch() && !patches {
+				if r.IsPatch() && hidePatches {
 					continue
 				}
 				// Match the interop site's default: legacy releases are hidden unless
@@ -139,10 +139,26 @@ func newReleasesCmd() *cobra.Command {
 			return tw.Flush()
 		},
 	}
-	cmd.Flags().BoolVar(&patches, "patches", false, "include patch releases")
+	addPatchFlags(cmd, &hidePatches, &patches)
 	cmd.Flags().BoolVar(&legacy, "legacy", false,
 		"include releases past General Support (what the interop site calls legacy)")
 	return cmd
+}
+
+// addPatchFlags wires --hide-patches, plus the --patches flag it replaced.
+//
+// Patch releases are shown by default, unlike on the interop site, because the patch
+// letter routinely decides the answer: vCenter 8.0U3 takes Supervisor 1.26 to 1.28 and
+// 8.0U3k takes 1.31 to 1.33. Hiding them by default answers a different question from the
+// one being asked.
+//
+// --patches therefore now describes the default and is kept only so existing scripts and
+// agent calls do not fail on an unknown flag.
+func addPatchFlags(cmd *cobra.Command, hide, deprecated *bool) {
+	cmd.Flags().BoolVar(hide, "hide-patches", false,
+		"hide patch releases (the interop site hides them by default; this tool shows them)")
+	cmd.Flags().BoolVar(deprecated, "patches", false, "include patch releases")
+	_ = cmd.Flags().MarkDeprecated("patches", "patch releases are shown by default; use --hide-patches to hide them")
 }
 
 func newProductsCmd() *cobra.Command {
@@ -208,7 +224,7 @@ func newProductsCmd() *cobra.Command {
 }
 
 func newCompatCmd() *cobra.Command {
-	var patches bool
+	var hidePatches, patches bool
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "compat <product> <version>",
@@ -227,7 +243,7 @@ use ` + "`vkstack stack`" + ` instead.`,
 			if err != nil {
 				return err
 			}
-			opts := graph.CompatOptions{IncludePatches: patches}
+			opts := graph.CompatOptions{HidePatches: hidePatches}
 			if all {
 				opts.Statuses = []int{
 					store.StatusCompatible, store.StatusIncompatible,
@@ -256,7 +272,7 @@ use ` + "`vkstack stack`" + ` instead.`,
 					// Every compatible release was a patch, and patches are hidden by
 					// default. "nothing compatible" would be false — and it was, for
 					// Supervisor builds whose only compatible vCenters are patches.
-					fmt.Fprintf(out, "  %-12s %d compatible, all patch releases — pass --patches\n",
+					fmt.Fprintf(out, "  %-12s %d compatible, all patch releases — drop --hide-patches\n",
 						grp.Product.Label+":", grp.HiddenPatches)
 					continue
 				case len(grp.Releases) == 0:
@@ -275,7 +291,7 @@ use ` + "`vkstack stack`" + ` instead.`,
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&patches, "patches", false, "include patch releases")
+	addPatchFlags(cmd, &hidePatches, &patches)
 	cmd.Flags().BoolVar(&all, "all-statuses", false, "include incompatible and unsupported results")
 	return cmd
 }
@@ -387,7 +403,7 @@ have no data by design.`,
 			tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "PAIR\tVERDICT")
 			for _, v := range res.Pairs {
-				if !v.Dependency {
+				if !v.Constrains {
 					continue
 				}
 				fmt.Fprintf(tw, "%s %s × %s %s\t%s\n",
@@ -395,11 +411,12 @@ have no data by design.`,
 			}
 			tw.Flush()
 
-			// Pairs the matrix publishes that are not dependencies are shown apart, so
-			// they cannot be read as part of the verdict. VKS runs on the Supervisor,
-			// not on vCenter, so a vCenter-VKS mismatch decides nothing.
+			// Published pairs outside the constraint set are shown apart, so they cannot
+			// be read as part of the verdict. VKS runs on the Supervisor, not on vCenter,
+			// so a vCenter-VKS mismatch decides nothing; ESX × NSX is a real dependency
+			// whose grid is too broad to decide anything either.
 			if info := res.Informational(); len(info) > 0 {
-				fmt.Fprintln(out, "\nAlso published, but not a dependency (not part of the verdict):")
+				fmt.Fprintln(out, "\nAlso published, but not part of the verdict:")
 				tw = tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 				for _, v := range info {
 					fmt.Fprintf(tw, "  %s %s × %s %s\t%s\n",
@@ -444,7 +461,7 @@ func verdictWord(v graph.PairVerdict) string {
 
 func newStackCmd() *cobra.Command {
 	var limit int
-	var patches bool
+	var hidePatches, patches bool
 	var list bool
 	var with []string
 
@@ -473,7 +490,7 @@ bottom so you know which parts of the stack are verified and which are inferred.
 	}
 	vals := pinFlags(cmd)
 	cmd.Flags().IntVar(&limit, "limit", 5, "with --list, maximum number of stacks to return")
-	cmd.Flags().BoolVar(&patches, "patches", false, "allow patch releases in the solution")
+	addPatchFlags(cmd, &hidePatches, &patches)
 	cmd.Flags().BoolVar(&list, "list", false, "list whole stack combinations instead of the recommendation plus alternatives")
 	cmd.Flags().StringSliceVar(&with, "with", nil,
 		"optional products to include in the stack ("+strings.Join(optionalKeys(), ", ")+"); repeatable or comma-separated")
@@ -504,7 +521,7 @@ bottom so you know which parts of the stack are verified and which are inferred.
 			return err
 		}
 
-		opts := graph.StackOptions{Limit: limit, IncludePatches: patches, Include: include}
+		opts := graph.StackOptions{Limit: limit, HidePatches: hidePatches, Include: include}
 		if g.mode == OutputCSV {
 			return csvUnavailable("stack")
 		}
@@ -534,7 +551,7 @@ bottom so you know which parts of the stack are verified and which are inferred.
 					"pinConflict":    failure.PinConflict,
 					"neverListed":    failure.Unlisted,
 				}
-				err.Hint = "loosen a pin, or pass --patches to allow patch releases"
+				err.Hint = "loosen a pin, or drop --hide-patches so patch releases can be chosen"
 			}
 			return err
 		}
@@ -628,25 +645,12 @@ func printRecommendation(w io.Writer, gr *graph.Graph, best graph.Stack, options
 
 	fmt.Fprintln(w, "\n  (--json lists every option; --list shows whole combinations)")
 
-	// Pairs upstream publishes that this tool does not enforce. `check` has always shown
-	// these; `stack` did not, so it could hand back a stack containing an ESX and an Avi
-	// upstream marks NOT SUPPORTED without a word. The pair is genuinely not a dependency
-	// and must not invalidate the stack — but staying silent about it is a different
-	// thing from not enforcing it.
-	if bad := notableInformational(gr.Check(best.Releases)); len(bad) > 0 {
-		fmt.Fprintln(w, "\nPublished as not compatible, but not enforced (these are not dependencies):")
-		tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		for _, v := range bad {
-			a, b := model.OrderPair(v.A, v.B)
-			ra, rb := v.ARelease, v.BRelease
-			if a.ID != v.A.ID {
-				ra, rb = rb, ra
-			}
-			fmt.Fprintf(tw, "  %s %s × %s %s\t%s\n", a.Label, ra.Raw, b.Label, rb.Raw, statusWord(v.Status))
-		}
-		tw.Flush()
-	}
-
+	// Non-dependency pairs are deliberately absent here. A stack answers "what runs
+	// together", and that is decided by the dependency chain alone; a pair like vCenter ×
+	// VKr says nothing about it, so surfacing upstream's verdict on one would read as a
+	// caveat on an answer it does not qualify. `check` still reports them, because there
+	// the caller named a combination and asked what is known about it. Which pairs are
+	// left out, and why, is documented rather than repeated per stack.
 	if inferred := best.Inferred(); len(inferred) > 0 {
 		var names []string
 		for _, v := range inferred {
@@ -656,19 +660,6 @@ func printRecommendation(w io.Writer, gr *graph.Graph, best graph.Stack, options
 		fmt.Fprintf(w, "\nNot published upstream, so inferred rather than verified: %s\n",
 			strings.Join(names, ", "))
 	}
-}
-
-// notableInformational returns the published non-dependency pairs worth interrupting for:
-// the ones upstream does not call compatible. The compatible ones are the normal case and
-// listing them all would bury this.
-func notableInformational(res graph.CheckResult) []graph.PairVerdict {
-	var out []graph.PairVerdict
-	for _, v := range res.Informational() {
-		if !graph.Compatible(v.Status) {
-			out = append(out, v)
-		}
-	}
-	return out
 }
 
 // recommendationJSON is the machine-readable form of the default output.
@@ -683,20 +674,6 @@ type recommendationJSON struct {
 	//
 	// Absence is not a claim that the deployment lacks them: they were not asked for.
 	Omitted []string `json:"omitted"`
-	// NotEnforced are published pairs in this stack that are not dependencies and that
-	// upstream does not call compatible. They do not invalidate the stack — `check`
-	// reports them the same way — but a caller that never sees them can hand on a stack
-	// containing a pair upstream marks NOT SUPPORTED.
-	NotEnforced []notEnforcedJSON `json:"notEnforced,omitempty"`
-}
-
-type notEnforcedJSON struct {
-	A          string `json:"a"`
-	AVersion   string `json:"aVersion"`
-	B          string `json:"b"`
-	BVersion   string `json:"bVersion"`
-	Status     int    `json:"status"`
-	StatusText string `json:"statusText"`
 }
 
 func buildRecommendationJSON(gr *graph.Graph, best graph.Stack, options map[int][]*graph.Release) recommendationJSON {
@@ -719,17 +696,6 @@ func buildRecommendationJSON(gr *graph.Graph, best graph.Stack, options map[int]
 	}
 	for _, v := range best.Inferred() {
 		out.Inferred = append(out.Inferred, v.A.Key+"×"+v.B.Key)
-	}
-	for _, v := range notableInformational(gr.Check(best.Releases)) {
-		a, b := model.OrderPair(v.A, v.B)
-		ra, rb := v.ARelease, v.BRelease
-		if a.ID != v.A.ID {
-			ra, rb = rb, ra
-		}
-		out.NotEnforced = append(out.NotEnforced, notEnforcedJSON{
-			A: a.Key, AVersion: ra.Raw, B: b.Key, BVersion: rb.Raw,
-			Status: v.Status, StatusText: statusWord(v.Status),
-		})
 	}
 	return out
 }
@@ -882,7 +848,7 @@ func pairsJSON(gr *graph.Graph) []map[string]any {
 			"a":          a.Key,
 			"b":          b.Key,
 			"published":  gr.Published(pr[0], pr[1]),
-			"dependency": model.IsDependency(pr[0], pr[1]),
+			"dependency": model.Constrains(pr[0], pr[1]),
 		})
 	}
 	return out
@@ -897,7 +863,7 @@ func checkJSON(res graph.CheckResult) map[string]any {
 			"b":          v.B.Key,
 			"aVersion":   v.ARelease.Raw,
 			"bVersion":   v.BRelease.Raw,
-			"dependency": v.Dependency,
+			"dependency": v.Constrains,
 			"published":  v.Published,
 			"evaluated":  v.HasEdge,
 			"status":     v.Status,

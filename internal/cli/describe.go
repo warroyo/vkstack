@@ -108,13 +108,13 @@ func surface() map[string]any {
 			{
 				"name": "releases", "schema": "vkstack.releases", "needsCache": true,
 				"args":    []string{"product"},
-				"flags":   map[string]string{"--patches": "include patch releases", "--legacy": "include releases past General Support"},
+				"flags":   map[string]string{"--hide-patches": "hide patch releases (shown by default)", "--legacy": "include releases past General Support"},
 				"summary": "Every release of one product, oldest first, with support phase.",
 			},
 			{
 				"name": "compat", "schema": "vkstack.compat", "needsCache": true,
 				"args":    []string{"product", "version"},
-				"flags":   map[string]string{"--patches": "include patch releases", "--all-statuses": "include incompatible results"},
+				"flags":   map[string]string{"--hide-patches": "hide patch releases (shown by default)", "--all-statuses": "include incompatible results"},
 				"summary": "The raw pairwise answer for one release, grouped by product.",
 			},
 			{
@@ -123,8 +123,8 @@ func surface() map[string]any {
 				"flags": map[string]string{
 					"--<product>": "pin a version, e.g. --vcenter 8.0U3k (repeat per product). " +
 						"Pinning an optional product also opts it in.",
-					"--patches": "allow patch releases",
-					"--list":    "return several stacks (vkstack.stacks)",
+					"--hide-patches": "hide patch releases (shown by default)",
+					"--list":         "return several stacks (vkstack.stacks)",
 					"--with": "include optional products (" + strings.Join(optionalKeys(), ", ") +
 						"); repeatable or comma-separated, and each is independent",
 				},

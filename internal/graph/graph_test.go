@@ -460,7 +460,22 @@ func TestCompatibleWithCountsPatchesItHides(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
+	// Patches are shown by default, so the compatible one is simply there.
 	for _, grp := range g.CompatibleWith(g.Releases[21], CompatOptions{}) {
+		if grp.Product.Key != "supervisor" {
+			continue
+		}
+		if len(grp.Releases) != 1 {
+			t.Fatalf("default should show the patch release, got %d", len(grp.Releases))
+		}
+		if grp.HiddenPatches != 0 {
+			t.Errorf("HiddenPatches = %d, want 0 when nothing is hidden", grp.HiddenPatches)
+		}
+	}
+
+	// Asking to hide them empties the group, and the count is what keeps that from
+	// reading as "nothing compatible".
+	for _, grp := range g.CompatibleWith(g.Releases[21], CompatOptions{HidePatches: true}) {
 		if grp.Product.Key != "supervisor" {
 			continue
 		}

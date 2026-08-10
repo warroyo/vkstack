@@ -321,12 +321,13 @@ func mcpTools() []map[string]any {
 		{
 			"name": "vkstack_products",
 			"description": "The products in scope, their release counts, and which of " +
-				"the ten product pairs upstream actually publishes.",
+				"the 21 product pairs upstream actually publishes.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{
 			"name": "vkstack_model",
-			"description": "How the five products depend on each other, how each " +
+			"description": "How the seven products — five core, plus optional NSX and " +
+				"Avi — depend on each other, how each " +
 				"relationship is known (published, inferred, or operational knowledge), " +
 				"and what this tool does not know. Read this before reasoning about the " +
 				"stack — it is the part that prevents wrong conclusions.",

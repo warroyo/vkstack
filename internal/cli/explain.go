@@ -13,8 +13,11 @@ func newExplainCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "explain",
-		Short: "Show how vCenter, ESX, Supervisor, VKS and VKr fit together",
-		Long: `Show how the five components depend on each other.
+		Short: "Show how vCenter, ESX, Supervisor, VKS, VKr, NSX and Avi fit together",
+		Long: `Show how the seven components depend on each other.
+
+Five are in every deployment; NSX and Avi are optional and independent of each other,
+and are drawn as such.
 
 Prints mermaid by default, so it can be pasted straight into a PR, an issue or a
 markdown doc. Use --ascii for a plain diagram in a bare terminal.

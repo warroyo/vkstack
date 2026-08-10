@@ -6,10 +6,16 @@ on:
 
 permissions:
   contents: write # goreleaser needs this to create the release and upload archives
+  id-token: write # npm provenance signs the publish with this workflow's OIDC identity
 
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
+    # Lifted to the job so the publish step can test for it: the `secrets` context is not
+    # available to a step's `if`, but `env` is. A fork or a repo without the token still
+    # gets its GitHub release; only the npm half is skipped.
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,3 +34,36 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- npm ---------------------------------------------------------------
+      #
+      # The npm packages carry the binaries goreleaser just built, read out of its own
+      # manifest rather than compiled again, so `npx -y @warroyo90/vkstack-mcp` and the
+      # release archives are the same bytes.
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: stage the npm packages
+        run: node npm/build.mjs "${GITHUB_REF_NAME#v}"
+
+      - name: publish to npm
+        if: env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Platform packages first. The launcher pins them by exact version, so a root
+          # package that reaches the registry ahead of them is uninstallable until they
+          # land. --provenance signs each publish with this workflow's OIDC identity,
+          # which is what `id-token: write` above is for.
+          for pkg in npm/staging/vkstack-mcp-*; do
+            npm publish "$pkg" --provenance --access public
+          done
+          npm publish npm/staging/vkstack-mcp --provenance --access public
+
+      - name: note a skipped npm publish
+        if: env.NPM_TOKEN == ''
+        run: echo "::warning::NPM_TOKEN is not set — the GitHub release went out, npm did not."

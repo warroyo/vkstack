@@ -5,3 +5,5 @@
 *.db
 *.db-wal
 *.db-shm
+# Local state from a wrangler dev run — cache and build output, not source.
+/.wrangler/

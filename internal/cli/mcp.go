@@ -251,9 +251,12 @@ func mcpTools() []map[string]any {
 							"product also opts it into the stack.",
 						"additionalProperties": map[string]any{"type": "string"},
 					},
-					"patches": map[string]any{
-						"type":        "boolean",
-						"description": "allow patch releases in the solution (default false)",
+					"hidePatches": map[string]any{
+						"type": "boolean",
+						"description": "hide patch releases from the solution (default false). " +
+							"Patch releases are included by default because the patch letter " +
+							"routinely decides compatibility: vCenter 8.0U3 takes Supervisor " +
+							"1.26-1.28, 8.0U3k takes 1.31-1.33.",
 					},
 					"include": map[string]any{
 						"type":  "array",
@@ -292,9 +295,9 @@ func mcpTools() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"product": product,
-					"version": map[string]any{"type": "string"},
-					"patches": map[string]any{"type": "boolean"},
+					"product":     product,
+					"version":     map[string]any{"type": "string"},
+					"hidePatches": map[string]any{"type": "boolean"},
 				},
 				"required": []string{"product", "version"},
 			},
@@ -305,8 +308,8 @@ func mcpTools() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"product": product,
-					"patches": map[string]any{"type": "boolean"},
+					"product":     product,
+					"hidePatches": map[string]any{"type": "boolean"},
 					"legacy": map[string]any{
 						"type":        "boolean",
 						"description": "include releases past General Support",
@@ -342,12 +345,13 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 	}
 
 	var args struct {
-		Pins    map[string]string `json:"pins"`
-		Product string            `json:"product"`
-		Version string            `json:"version"`
-		Patches bool              `json:"patches"`
-		Legacy  bool              `json:"legacy"`
-		Include []string          `json:"include"`
+		Pins        map[string]string `json:"pins"`
+		Product     string            `json:"product"`
+		Version     string            `json:"version"`
+		HidePatches bool              `json:"hidePatches"`
+		Patches     bool              `json:"patches"` // accepted and ignored: now the default
+		Legacy      bool              `json:"legacy"`
+		Include     []string          `json:"include"`
 	}
 	if len(params.Arguments) > 0 {
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
@@ -378,7 +382,7 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 		}
 		var out []*graph.Release
 		for _, r := range gr.ReleasesOf(p.ID) {
-			if r.IsPatch() && !args.Patches {
+			if r.IsPatch() && args.HidePatches {
 				continue
 			}
 			if !r.Phase().Supported() && !args.Legacy {
@@ -393,7 +397,7 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 		if err != nil {
 			return toolError(classify(err).Message)
 		}
-		groups := gr.CompatibleWith(r, graph.CompatOptions{IncludePatches: args.Patches})
+		groups := gr.CompatibleWith(r, graph.CompatOptions{HidePatches: args.HidePatches})
 		return toolResult(map[string]any{
 			"product": args.Product, "version": r.Raw, "groups": groups,
 		})
@@ -420,7 +424,7 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 		if err != nil {
 			return toolError(classify(err).Message)
 		}
-		opts := graph.StackOptions{Limit: 1, IncludePatches: args.Patches, Include: include}
+		opts := graph.StackOptions{Limit: 1, HidePatches: args.HidePatches, Include: include}
 		stacks, failure := gr.Stacks(pins, opts)
 		if len(stacks) == 0 {
 			// A dead end is an answer. It comes back as a result rather than an error so

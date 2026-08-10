@@ -25,18 +25,18 @@ type Stack struct {
 	Verdicts []PairVerdict
 }
 
-// Inferred returns dependency pairs in this stack that upstream does not publish — the
+// Inferred returns constraining pairs in this stack that upstream does not publish — the
 // ones taken on trust.
 //
-// With the constraint set limited to real dependencies this is normally empty: all seven
-// gaps in the matrix fall on pairs that are not dependencies. Three are the long-standing
-// ones (ESX against VKS and VKr, Supervisor against VKr); the other four are NSX and Avi
-// against VKS and VKr, and neither optional component is a dependency of the guest
-// cluster layer. So nothing has to be inferred to validate a stack.
+// With the constraint set as narrow as it is this is normally empty: all seven gaps in the
+// matrix fall outside it. Three are the long-standing ones (ESX against VKS and VKr,
+// Supervisor against VKr); the other four are NSX and Avi against VKS and VKr, and neither
+// optional component is a dependency of the guest cluster layer. So nothing has to be
+// inferred to validate a stack.
 func (s Stack) Inferred() []PairVerdict {
 	var out []PairVerdict
 	for _, v := range s.Verdicts {
-		if v.Dependency && v.Unverified() {
+		if v.Constrains && v.Unverified() {
 			out = append(out, v)
 		}
 	}
@@ -47,9 +47,15 @@ func (s Stack) Inferred() []PairVerdict {
 type StackOptions struct {
 	// Limit caps the number of stacks returned. Zero means one.
 	Limit int
-	// IncludePatches allows patch releases to be chosen. Off by default: a stack made
-	// of the latest patch of each line is what people actually want to see.
-	IncludePatches bool
+	// HidePatches drops patch releases from the solve.
+	//
+	// Off by default, which is the opposite of the interop site: its "hide patch
+	// releases" box starts checked. The definition of a patch is upstream's (see
+	// Release.IsPatch), but hiding them by default is not, because compatibility is
+	// published per release and the patch letter routinely decides the answer — vCenter
+	// 8.0U3 takes Supervisor 1.26 to 1.28, while 8.0U3k takes 1.31 to 1.33. A solver that
+	// cannot see 8.0U3k cannot find the stack that actually works.
+	HidePatches bool
 	// Include opts optional products into the solve, by product key.
 	//
 	// Optional products (NSX, Avi) are left out unless they are pinned or named here.
@@ -108,7 +114,7 @@ func (g *Graph) Stacks(pins map[int]*Release, opts StackOptions) ([]Stack, *Stac
 		}
 	}
 
-	order := solveOrder(pins, opts)
+	order := recommendOrder(pins, opts)
 	assigned := make(map[int]*Release, len(model.Products))
 	maps.Copy(assigned, pins)
 
@@ -230,7 +236,7 @@ func (g *Graph) firstBadPin(pins map[int]*Release) (PairVerdict, bool) {
 func (g *Graph) candidatesFor(productID int, assigned map[int]*Release, opts StackOptions) []*Release {
 	var out []*Release
 	for _, r := range g.ReleasesOf(productID) {
-		if r.IsPatch() && !opts.IncludePatches {
+		if r.IsPatch() && opts.HidePatches {
 			continue
 		}
 		if g.consistent(r, assigned) {
@@ -252,7 +258,7 @@ func (g *Graph) consistent(r *Release, assigned map[int]*Release) bool {
 		}
 		// Only real dependencies constrain a stack. vCenter against VKS is published
 		// but is not a dependency, and enforcing it rules out combinations that work.
-		if !model.IsDependency(r.ProductID, otherID) || !g.Published(r.ProductID, otherID) {
+		if !model.Constrains(r.ProductID, otherID) || !g.Published(r.ProductID, otherID) {
 			continue
 		}
 		status, ok := g.Status(r.ID, other.ID)
@@ -268,7 +274,7 @@ func (g *Graph) consistent(r *Release, assigned map[int]*Release) bool {
 // everything.
 func (g *Graph) blockingProduct(productID int, assigned map[int]*Release) model.Product {
 	for otherID, other := range assigned {
-		if !model.IsDependency(productID, otherID) || !g.Published(productID, otherID) {
+		if !model.Constrains(productID, otherID) || !g.Published(productID, otherID) {
 			continue
 		}
 		anyOK := false
@@ -312,7 +318,7 @@ func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int]
 	out := make(map[int][]*Release, len(model.Products))
 	// Include has to survive into the probe: a caller solving with --with nsx is asking
 	// what else can join *that* stack, not the one without NSX.
-	probe := StackOptions{Limit: 1, IncludePatches: opts.IncludePatches, Include: opts.Include}
+	probe := StackOptions{Limit: 1, HidePatches: opts.HidePatches, Include: opts.Include}
 
 	// A pin that no complete stack can contain has no viable options anywhere, including
 	// itself. Returning the pin regardless made a dead end look like a one-node answer:
@@ -339,7 +345,7 @@ func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int]
 
 		var viable []*Release
 		for _, r := range g.ReleasesOf(p.ID) {
-			if r.IsPatch() && !opts.IncludePatches {
+			if r.IsPatch() && opts.HidePatches {
 				continue
 			}
 			trial[p.ID] = r
@@ -369,7 +375,7 @@ func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int]
 // key. Each is decided on its own — no optional product implies another — so opting into
 // Avi alone produces an order with Avi in it and no NSX.
 func solveOrder(pins map[int]*Release, opts StackOptions) []int {
-	priority := map[string]int{
+	return orderBy(pins, opts, map[string]int{
 		"supervisor": 0,
 		"vks":        1,
 		"vkr":        2,
@@ -377,7 +383,37 @@ func solveOrder(pins map[int]*Release, opts StackOptions) []int {
 		"avi":        4,
 		"vcenter":    5,
 		"esx":        6,
-	}
+	})
+}
+
+// recommendOrder is the order Stacks fills products in, which is what decides *which*
+// valid stack is called the newest one.
+//
+// solveOrder is tuned for pruning — most constrained first — and that is the right order
+// when the only question is whether any stack exists. It is the wrong order for the
+// recommendation, because the first complete assignment takes the newest release of
+// whichever product happens to be filled first. With Supervisor leading, pinning VKr 1.36
+// returned Supervisor 1.33.9 on the vsc0 train, whose only vCenter is 8.0U3k — so the
+// "newest valid combination" was built on vSphere 8 while a vSphere 9.1 stack carrying the
+// same VKr sat there unreported. Nothing was incompatible; the search simply announced
+// Supervisor's newness as the whole stack's.
+//
+// The platform decides instead. vCenter and ESX are what a deployment is upgraded around,
+// so newest-first means newest vCenter first, and the Kubernetes chain is filled beneath
+// whatever that allows.
+func recommendOrder(pins map[int]*Release, opts StackOptions) []int {
+	return orderBy(pins, opts, map[string]int{
+		"vcenter":    0,
+		"esx":        1,
+		"nsx":        2,
+		"avi":        3,
+		"supervisor": 4,
+		"vks":        5,
+		"vkr":        6,
+	})
+}
+
+func orderBy(pins map[int]*Release, opts StackOptions, priority map[string]int) []int {
 	var out []int
 	for _, p := range model.Products {
 		if _, pinned := pins[p.ID]; pinned {

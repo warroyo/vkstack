@@ -550,6 +550,10 @@ func TestStackMapAviPinSolvesWithoutNSX(t *testing.T) {
 
 // NSX and Avi carry no Kubernetes minor, so without an explicit grouping rule every
 // release would become its own node.
+//
+// One node per line, including where the builds in a line are not interchangeable. Which
+// build a node hands over is setPin's problem, not the grouping's — splitting the line
+// made the map harder to read without telling the reader anything the pin note does not.
 func TestStackMapGroupsOptionalLayersByLine(t *testing.T) {
 	body := get(t, testServer(t), "/api/stackmap")
 
@@ -570,6 +574,58 @@ func TestStackMapGroupsOptionalLayersByLine(t *testing.T) {
 		}
 		if strings.Join(labels, ",") != strings.Join(expect, ",") {
 			t.Errorf("%s nodes = %v, want %v", key, labels, expect)
+		}
+	}
+}
+
+// TestGroupedNodeNeverHidesAReachableStack is the invariant behind the split.
+//
+// Every node on the map pins one release — its newest member. If some other member of the
+// same node would have reached a complete stack that the pinned one cannot, the node is
+// concealing a working answer behind a version number, and a reader has no way to find it
+// from the map. Avi 32.1 was the worst case in real data: the newest build reached no
+// stack at all while its sibling did, so clicking the line handed over a dead end.
+func TestGroupedNodeNeverHidesAReachableStack(t *testing.T) {
+	g := testGraph(t)
+	body := get(t, serverForGraph(t, g), "/api/stackmap?with=nsx,avi")
+
+	// Solving each member independently is deliberately not how the map groups them —
+	// reachKey compares published peer lines, never solves. So this checks the property
+	// that matters against a different method, and would catch reachKey being too coarse.
+	solves := func(product string, raw string) bool {
+		p, ok := model.ByKey(product)
+		if !ok {
+			return false
+		}
+		r, err := g.Resolve(product, raw)
+		if err != nil {
+			return false
+		}
+		return g.StackExists(map[int]*graph.Release{p.ID: r},
+			graph.StackOptions{Include: []string{"nsx", "avi"}})
+	}
+
+	for _, l := range body["layers"].([]any) {
+		layer := l.(map[string]any)
+		key := layer["key"].(string)
+		for _, n := range layer["nodes"].([]any) {
+			node := n.(map[string]any)
+			releases, _ := node["releases"].([]any)
+			pin, _ := node["pin"].(string)
+			if len(releases) < 2 || pin == "" {
+				continue
+			}
+			pinned := solves(key, pin)
+			for _, r := range releases {
+				raw := r.(string)
+				if raw == pin || pinned {
+					continue
+				}
+				if solves(key, raw) {
+					t.Errorf("%s node %q pins %s, which reaches no stack, while %s in the same node does — the node hides a working answer",
+						key, node["label"], pin, raw)
+				}
+			}
 		}
 	}
 }

@@ -36,7 +36,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(n, "%d", &perProduct)
 	}
 
-	groups := g.CompatibleWith(focus, graph.CompatOptions{IncludePatches: q.Get("patches") == "true"})
+	groups := g.CompatibleWith(focus, graph.CompatOptions{HidePatches: q.Get("hidePatches") == "true"})
 
 	var b strings.Builder
 	b.WriteString("flowchart LR\n")

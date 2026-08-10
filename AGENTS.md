@@ -243,8 +243,9 @@ as an upgrade**. A stack this tool calls valid is a valid *destination*, not a r
 # The whole stack from one pinned version
 vkstack stack vcenter 8.0U3k
 
-# Same, allowing patch releases
-vkstack stack vcenter 8.0U3k --patches
+# Same, without patch releases. They are included by default, because the patch letter
+# often decides the answer: vCenter 8.0U3 takes Supervisor 1.26-1.28, 8.0U3k takes 1.31-1.33.
+vkstack stack vcenter 8.0U3k --hide-patches
 
 # Pin several layers at once
 vkstack stack vcenter 8.0U3k supervisor v1.32.9
@@ -261,7 +262,7 @@ vkstack stack --avi 32.1.2
 vkstack check --vcenter 8.0U3k --esx 8.0U3 --supervisor v1.33.9+vmware.3-fips-vsc0.1.15
 
 # What exists, before asking about a version that does not
-vkstack releases supervisor --patches
+vkstack releases supervisor
 
 # Is the cache present and fresh enough to trust?
 vkstack cache info

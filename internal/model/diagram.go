@@ -233,6 +233,88 @@ func Explanation(covered Coverage) string {
 	return b.String()
 }
 
+// DecidingPairs states which relationships validate a stack and which are looked up but
+// never allowed to decide anything.
+//
+// Both lists are derived from Edges rather than written down, so a change to Primary
+// shows up here instead of leaving the prose behind.
+func DecidingPairs(covered Coverage) string {
+	var deps, rest, restUnpublished []string
+	for _, e := range Edges {
+		from, _ := ByKey(e.From)
+		to, _ := ByKey(e.To)
+		label := from.Label + " × " + to.Label
+		switch {
+		case e.Primary:
+			deps = append(deps, label)
+		default:
+			rest = append(rest, "**"+label+"**")
+			if !covered(from.ID, to.ID) {
+				restUnpublished = append(restUnpublished, label)
+			}
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s of the %s relationships above are dependencies, and those alone decide "+
+		"whether a stack is valid: %s.\n\n",
+		sentenceCase(countWord(len(deps))), countWord(len(Edges)), commaAnd(deps))
+	fmt.Fprintf(&b, "The other %s are looked up but never allowed to decide a stack: %s. The reason "+
+		"differs by pair and is given with each relationship above. Some are not dependencies "+
+		"at all — VKr is provisioned by VKS, so a direct vCenter verdict on it decides nothing. "+
+		"Others are real dependencies that still constrain nothing in practice: NSX does prepare "+
+		"the ESX hosts as transport nodes, but that grid is nearly as permissive as the vCenter "+
+		"one and the two move together, so enforcing it rules out nothing the vCenter pair has "+
+		"not already ruled out. ESX × Avi is the opposite shape — almost every cell is empty, so "+
+		"enforcing it would collapse every Avi-bearing stack rather than narrow it.\n\n",
+		countWord(len(rest)), commaAnd(rest))
+	published := "Upstream publishes all of them"
+	if len(restUnpublished) > 0 {
+		published = "Upstream publishes all of them but " + commaAnd(restUnpublished) +
+			", which has no data at all"
+	}
+	fmt.Fprintf(&b, "%s, and marks some combinations NOT SUPPORTED "+
+		"that this tool will still recommend. That is expected rather than a contradiction: VKr "+
+		"1.32.10, for one, is published against vCenter 9.0.0.0 but not 8.0U3, while VKr 1.32.7 "+
+		"covers both — even though VKS 3.3.3 serves either one and nothing in the dependency "+
+		"chain differs. `vkstack stack` therefore reports the dependency chain and nothing else. "+
+		"To see a non-dependency pair as upstream publishes it, ask for it directly with "+
+		"`vkstack compat` or name the whole combination with `vkstack check`; both report every "+
+		"published pair.\n", published)
+	return b.String()
+}
+
+// countWord spells small counts, which read better than digits in the middle of prose.
+func countWord(n int) string {
+	words := []string{"zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+		"nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"}
+	if n < len(words) {
+		return words[n]
+	}
+	return fmt.Sprint(n)
+}
+
+// sentenceCase uppercases the first letter, for a spelled count opening a sentence.
+func sentenceCase(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// commaAnd joins a list the way prose does, with "and" before the last item.
+func commaAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
 func orderedLabels() []string {
 	keys := UpgradeOrder()
 	labels := make([]string, len(keys))
@@ -260,6 +342,8 @@ func Doc(covered Coverage) string {
 	b.WriteString("```\n\n")
 	b.WriteString("## What each relationship means\n\n")
 	b.WriteString(Explanation(covered))
+	b.WriteString("\n## Which pairs decide a stack\n\n")
+	b.WriteString(DecidingPairs(covered))
 	b.WriteString("\n## Reading the versions\n\n")
 	for _, p := range Products {
 		if len(p.Trains) == 0 {

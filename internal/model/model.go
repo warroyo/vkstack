@@ -148,15 +148,19 @@ type Edge struct {
 	// Bidirectional marks a mutual version-pairing constraint rather than a
 	// "this one determines that one" direction.
 	Bidirectional bool
-	// Primary marks a real dependency: one component actually runs on, is delivered by,
-	// or is provisioned by the other.
+	// Primary marks the pairs that constrain a solve. It is the constraint set, not a
+	// claim about which relationships are real, and the two are not the same question.
 	//
-	// This is also the constraint set. The matrix publishes pairs that are not
-	// dependencies — vCenter against VKS and against VKr — and those must not be
-	// enforced when validating a stack: VKS does not run on vCenter, it runs on the
-	// Supervisor, so Supervisor is what decides whether a VKS version is usable.
-	// Enforcing the non-dependency pairs produces combinations that are listed
-	// compatible yet cannot exist.
+	// Most non-primary pairs are not dependencies at all: the matrix publishes vCenter
+	// against VKS and against VKr, but VKS runs on the Supervisor, so enforcing those
+	// produces combinations that are listed compatible yet cannot exist.
+	//
+	// ESX × NSX is the case that shows why the flag means enforcement rather than
+	// dependency. NSX leans heavily on the hosts it prepares as transport nodes — a real
+	// dependency by any reading — but its published grid is nearly as permissive as the
+	// vCenter one, and vCenter and ESX move together. Enforcing it removes nothing the
+	// vCenter pair has not already removed, and costs a great deal of search to find that
+	// out, so it stays out of the constraint set.
 	Primary bool
 	// Evidence says how this relationship is known.
 	Evidence Evidence
@@ -245,13 +249,16 @@ var Edges = []Edge{
 	},
 	{
 		From: "esx", To: "nsx", Label: "published directly",
-		Summary: "Published, but not enforced — vCenter is the pair that decides.",
-		Prose: "NSX does prepare the ESX hosts as transport nodes, and upstream publishes " +
-			"the pair. It is not enforced, because vCenter and ESX move together and NSX " +
-			"is already constrained against vCenter: adding the host pair rules out " +
-			"nothing the vCenter pair does not, and costs a great deal of search to " +
-			"discover that. NSX is constrained against vCenter, the Supervisor and Avi, " +
-			"and nothing else. This pair is looked up and reported.",
+		Summary: "A real dependency, but broad — vCenter is the pair that decides.",
+		Prose: "NSX leans heavily on the ESX hosts: it prepares them as transport nodes, " +
+			"and the host version genuinely matters. Upstream publishes the pair, and it " +
+			"is still not enforced — not because the dependency is weak, but because the " +
+			"published grid is broad. It says yes to very nearly every combination the " +
+			"vCenter pair already allows, and vCenter and ESX move together in any case, " +
+			"so adding the host pair rules out nothing the vCenter pair does not while " +
+			"costing a great deal of search to discover that. NSX is constrained against " +
+			"vCenter, the Supervisor and Avi, and nothing else. This pair is looked up " +
+			"and reported.",
 		Evidence: EvidencePublished,
 	},
 	{
@@ -305,12 +312,14 @@ var Edges = []Edge{
 	},
 }
 
-// IsDependency reports whether two products have a real dependency between them, and so
-// whether their compatibility should constrain a stack.
+// Constrains reports whether a pair is allowed to decide a stack.
 //
-// Pairs the matrix publishes that are not dependencies (vCenter against VKS or VKr) are
-// informational: useful to look up, wrong to enforce.
-func IsDependency(aProductID, bProductID int) bool {
+// This is deliberately not the same as "is a real dependency". ESX × NSX is a real
+// dependency that does not constrain, because its published grid is broad enough to rule
+// out nothing the vCenter pair does not. vCenter × VKS is the other way round: published,
+// enforceable-looking, and not a dependency at all. Both are looked up and reported; only
+// the pairs marked Primary include or exclude anything.
+func Constrains(aProductID, bProductID int) bool {
 	for _, e := range Edges {
 		if !e.Primary {
 			continue

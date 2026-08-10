@@ -147,7 +147,7 @@ func TestESXAviIsInformationalNotBlocking(t *testing.T) {
 	for _, v := range g.Check(s.Releases).Informational() {
 		if (v.A.Key == "esx" && v.B.Key == "avi") || (v.A.Key == "avi" && v.B.Key == "esx") {
 			found = true
-			if v.Dependency {
+			if v.Constrains {
 				t.Error("ESX × Avi must not be a dependency")
 			}
 		}
@@ -200,7 +200,7 @@ func TestViableOptionsFollowsInclude(t *testing.T) {
 	pins := map[int]*Release{vc: g.Releases[21]}
 
 	t.Run("absent when not asked for", func(t *testing.T) {
-		viable := g.ViableOptions(pins, StackOptions{IncludePatches: true})
+		viable := g.ViableOptions(pins, StackOptions{HidePatches: false})
 		for _, id := range []int{nsx, avi} {
 			p, _ := model.ByID(id)
 			if got := len(viable[id]); got != 0 {
@@ -216,7 +216,7 @@ func TestViableOptionsFollowsInclude(t *testing.T) {
 	} {
 		p, _ := model.ByID(tc.include)
 		t.Run("included: "+p.Key, func(t *testing.T) {
-			viable := g.ViableOptions(pins, StackOptions{IncludePatches: true, Include: []string{p.Key}})
+			viable := g.ViableOptions(pins, StackOptions{HidePatches: false, Include: []string{p.Key}})
 			if len(viable[tc.want]) == 0 {
 				t.Errorf("%s was included but has no options", p.Key)
 			}
@@ -235,8 +235,8 @@ func TestViableOptionsForOneOptionalDoNotDependOnTheOther(t *testing.T) {
 	g := load(t, Options{})
 	pins := map[int]*Release{vc: g.Releases[21]}
 
-	alone := g.ViableOptions(pins, StackOptions{IncludePatches: true, Include: []string{"nsx"}})
-	both := g.ViableOptions(pins, StackOptions{IncludePatches: true, Include: []string{"nsx", "avi"}})
+	alone := g.ViableOptions(pins, StackOptions{HidePatches: false, Include: []string{"nsx"}})
+	both := g.ViableOptions(pins, StackOptions{HidePatches: false, Include: []string{"nsx", "avi"}})
 
 	// With both included the NSX list may legitimately narrow, because NSX × Avi is a
 	// real dependency once Avi is in the stack. What must never happen is the reverse:
@@ -276,8 +276,8 @@ func TestStackExistsAgreesWithStacks(t *testing.T) {
 
 	checked, disagreed := 0, 0
 	for _, inc := range includes {
-		for _, patches := range []bool{false, true} {
-			opts := StackOptions{Limit: 1, IncludePatches: patches, Include: inc}
+		for _, hidePatches := range []bool{false, true} {
+			opts := StackOptions{Limit: 1, HidePatches: hidePatches, Include: inc}
 
 			// No pins at all, then every single-product pin the caller could send.
 			pinSets := []map[int]*Release{{}}
@@ -311,8 +311,8 @@ func TestStackExistsAgreesWithStacks(t *testing.T) {
 							names = append(names, p.Key+" "+r.Raw)
 						}
 						sort.Strings(names)
-						t.Errorf("StackExists=%v but Stacks found %d, for include=%v patches=%v pins=%v",
-							got, len(stacks), inc, patches, names)
+						t.Errorf("StackExists=%v but Stacks found %d, for include=%v hidePatches=%v pins=%v",
+							got, len(stacks), inc, hidePatches, names)
 					}
 				}
 			}

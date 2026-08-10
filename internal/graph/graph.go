@@ -71,7 +71,18 @@ func (r Release) Phase() SupportPhase {
 	}
 }
 
-// IsPatch reports whether this is a patch release, which most views collapse by default.
+// IsPatch reports whether this is a patch release, which most views hide by default.
+//
+// This is upstream's own definition, not a heuristic over version strings. The matrix
+// endpoint takes an isHidePatch flag, and setting it drops exactly the releases whose
+// releaseType is "Patch" — nothing else. "Maint", "Maintenance", "Unknown" and untyped
+// releases all survive it, so they are not patches here either, however patch-like their
+// version numbers look. VKr 1.32.10 is a Maintenance release and is a first-class
+// candidate; vCenter 8.0U3k is a Patch and is hidden until asked for.
+//
+// Matching upstream matters because compatibility is published per release, not per
+// version line: VKr 1.32.7 and 1.32.10 sit in the same line and disagree about vCenter
+// 8.0U3. Collapsing a line would invent an answer upstream never gave.
 func (r Release) IsPatch() bool { return r.ReleaseType == "Patch" }
 
 // Edge is one compatibility result from the perspective of a given release.

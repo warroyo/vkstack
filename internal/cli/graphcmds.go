@@ -372,7 +372,7 @@ func newCheckCmd() *cobra.Command {
 		Long: `Validate every pair of a pinned stack.
 
 Exits non-zero if any pair is actively incompatible. Pairs that upstream does not
-publish are reported as unverified and do not fail the check — three of the ten pairs
+publish are reported as unverified and do not fail the check — seven of the 21 pairs
 have no data by design.`,
 		Args: cobra.NoArgs,
 	}

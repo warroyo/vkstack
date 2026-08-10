@@ -84,10 +84,14 @@ func surface() map[string]any {
 				"distributed-switch deployment. A stack without them is a complete " +
 				"answer about the five core products, not a claim that the deployment " +
 				"has no NSX.",
-			"enforcedPairs": "Only real dependencies constrain a stack. vCenter×VKS, " +
-				"vCenter×VKr and ESX×Avi are published but not dependencies: they are " +
-				"reported, never enforced. ESX×Avi in particular is almost entirely " +
-				"blank upstream, and enforcing it would rule out Avi deployments that work.",
+			"enforcedPairs": "Ten of the 21 pairs are allowed to decide a stack. " +
+				"vCenter×VKS and vCenter×VKr are published but not dependencies: VKS runs " +
+				"on the Supervisor and VKr is provisioned by VKS. ESX×NSX and ESX×Avi are " +
+				"real dependencies that are still not enforced, because vCenter and ESX " +
+				"move together and both optional products are already constrained against " +
+				"vCenter, so the host pair rules out nothing the vCenter pair does not — " +
+				"and ESX×Avi is almost entirely blank upstream besides. All four are " +
+				"reported, never used to include or exclude.",
 			"unpublishedPairs": "ESX×VKS, ESX×VKr, Supervisor×VKr, NSX×VKS, NSX×VKr, " +
 				"Avi×VKS and Avi×VKr have no upstream data at all. Answers touching them " +
 				"are labelled inferred, never verified.",

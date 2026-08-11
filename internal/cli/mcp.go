@@ -324,8 +324,10 @@ func mcpTools() []map[string]any {
 			},
 		},
 		{
-			"name":        "vkstack_releases",
-			"description": "Every release of one product, newest last, with support phase.",
+			"name": "vkstack_releases",
+			"description": "Every release of one product, newest last, with support phase. " +
+				"The phase prefers Broadcom's published end-of-general-support date (eogsDate) " +
+				"over the interop matrix flags, which lag; phaseSource says which decided.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -414,7 +416,7 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 			if r.IsPatch() && args.HidePatches {
 				continue
 			}
-			if !r.Phase().Supported() && !args.Legacy {
+			if !r.EffectivePhase().Supported() && !args.Legacy {
 				continue
 			}
 			out = append(out, r)

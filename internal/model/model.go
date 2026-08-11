@@ -8,7 +8,10 @@
 // is reviewable and expected to be corrected in place.
 package model
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // Scheme selects how a product's version strings are parsed and ordered.
 type Scheme string
@@ -56,6 +59,78 @@ type Product struct {
 	// publishes against ESX are reported but never enforced — vCenter and ESX move
 	// together, so the host pair excludes nothing the vCenter pair does not.
 	Optional bool
+	// Lifecycle says where this product's published support dates live. A zero value
+	// means the lifecycle portal has nothing for it and only the matrix flags apply.
+	Lifecycle Lifecycle
+}
+
+// Match is how a lifecycle row's release string is joined onto an interop release.
+type Match string
+
+const (
+	// MatchExact: the two sources use the same string. VKS publishes "3.4.2+v1.33" on
+	// both sides.
+	MatchExact Match = ""
+	// MatchMinor: lifecycle publishes a version line. VKr's "1.32" covers 1.32.0
+	// through 1.32.10.
+	MatchMinor Match = "minor"
+	// MatchPrefix: lifecycle publishes a coarser build. vCenter "8.0U3" covers 8.0U3k,
+	// NSX "9.1.0.0" covers 9.1.0.0200.
+	MatchPrefix Match = "prefix"
+)
+
+// Lifecycle locates a product in the Broadcom Product Lifecycle portal.
+//
+// Two filters are needed because neither of the portal's own fields identifies a product
+// on its own. productName is a portfolio bucket: "VMware vSphere Kubernetes Service"
+// omits two real VKS releases that file under "Tanzu Kubernetes Runtime", and the same
+// bucket carries Avi and vCenter rows. description names the actual product, but as a
+// filter it over-collects — "VMware NSX" pulls in unrelated Network Detection and
+// Response builds.
+//
+// So the query narrows server-side by whichever field is usable, and Keep narrows what
+// comes back by description.
+type Lifecycle struct {
+	// ProductName and Description are exact-match server-side filters. Empty means the
+	// field is not filtered on. At least one must be set for a product to be sourced.
+	ProductName string
+	Description string
+	// Keep is a description allow-list applied to the rows that come back. An entry
+	// ending in "*" matches by prefix, anything else matches exactly. Empty keeps
+	// everything.
+	//
+	// Both forms are needed. vCenter writes a per-release description ("VMware vCenter
+	// Server 8.0U2c") so it can only be matched by prefix, while Avi needs exact
+	// matching or "VMware Avi Load Balancer Conversion Tool" comes along with it.
+	Keep []string
+	// Match is the fallback join used when no lifecycle row carries the release string
+	// verbatim.
+	Match Match
+	// NoTechnicalGuidance marks a product Broadcom publishes no technical guidance
+	// period for, so passing end of general support ends support outright.
+	NoTechnicalGuidance bool
+}
+
+// Sourced reports whether the lifecycle portal has data for this product.
+func (l Lifecycle) Sourced() bool { return l.ProductName != "" || l.Description != "" }
+
+// Keeps reports whether a row's description belongs to this product.
+func (l Lifecycle) Keeps(description string) bool {
+	if len(l.Keep) == 0 {
+		return true
+	}
+	for _, want := range l.Keep {
+		if prefix, ok := strings.CutSuffix(want, "*"); ok {
+			if strings.HasPrefix(description, prefix) {
+				return true
+			}
+			continue
+		}
+		if description == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Products are the seven components in scope, in diagram order.
@@ -71,26 +146,68 @@ var Products = []Product{
 		Key: "vcenter", ID: 2, Name: "VMware vCenter", Label: "vCenter",
 		Scheme: SchemeVSphere, Example: "8.0U3k", MinVersion: "8.0U3",
 		K8sMinorRun: -1, UpgradeOrder: 1,
+		// "VMware vCenter*" rather than "VMware vCenter Server*": the 9.1.0.0 row is
+		// filed under "VMware vCenter for vSphere Edge", and it is the only place that
+		// build's date is published.
+		Lifecycle: Lifecycle{
+			ProductName: "VMware vCenter Server",
+			Keep:        []string{"VMware vCenter*"},
+			Match:       MatchPrefix,
+		},
 	},
 	{
 		Key: "esx", ID: 1, Name: "VMware ESX", Label: "ESX",
 		Scheme: SchemeVSphere, Example: "8.0U3k", MinVersion: "8.0U3",
 		K8sMinorRun: -1, UpgradeOrder: 2,
+		// ESX is published thinly and coarsely: the whole 8 line is one row, "8.x".
+		// Everything else under this productName is another product riding it —
+		// vSphere Replication, Live Recovery, vSAN Data Protection — so the allow-list
+		// is doing real work here.
+		Lifecycle: Lifecycle{
+			ProductName: "VMware vSphere ESXi",
+			Keep: []string{
+				"VMware vSphere (ESXi)",
+				"VMware vSphere Hypervisor",
+				"VMware vSphere - *",
+				"VMware vSphere Enterprise Plus*",
+				"VMware vSphere for vSAN Witness*",
+				"VMware Cloud Foundation",
+				"VMware vSphere Foundation",
+			},
+			Match: MatchPrefix,
+		},
 	},
 	{
 		Key: "nsx", ID: 912, Name: "VMware NSX", Label: "NSX",
 		Scheme: SchemeVSphere, Example: "9.1.0.0200",
 		K8sMinorRun: -1, UpgradeOrder: 3, Optional: true,
+		// NSX 9.x is published under the Cloud Foundation description rather than its
+		// own, and only down to 9.1.0.0 — the 9.1.0.0200 builds join by prefix.
+		Lifecycle: Lifecycle{
+			ProductName: "VMware NSX",
+			Keep:        []string{"VMware NSX", "VMware Cloud Foundation"},
+			Match:       MatchPrefix,
+		},
 	},
 	{
 		Key: "avi", ID: 1795, Name: "Avi Load Balancer", Label: "Avi",
 		Scheme: SchemeGeneric, Example: "32.1.2",
 		K8sMinorRun: -1, UpgradeOrder: 4, Optional: true,
+		// The older name is kept because the portal still files Avi's 22.1.x and 30.1.x
+		// lines under it. Both entries are exact: prefix matching would drag in the
+		// conversion tools and the Kubernetes operator, which version independently.
+		Lifecycle: Lifecycle{
+			ProductName: "VMware Avi Load Balancer",
+			Keep:        []string{"VMware Avi Load Balancer", "VMware NSX Advanced Load Balancer"},
+		},
 	},
 	{
 		Key: "supervisor", ID: 1378, Name: "VMware vSphere Supervisor", Label: "Supervisor",
 		Scheme: SchemeGeneric, Example: "v1.32.9+vmware.2-fips-vsc9.1.0.0200",
 		K8sMinorRun: 0, UpgradeOrder: 5,
+		// No Lifecycle: the portal has no Supervisor entry under any name. It ships
+		// inside vCenter and VCF and is never listed on its own, so the Supervisor is
+		// the one product still judged solely by the matrix flags.
 		Trains: []string{"vsc9", "vsc0"},
 		TrainNote: "vsc9.x ships with vCenter 9.x; vsc0.x is versioned independently. " +
 			"The same Kubernetes version exists on both and they are not interchangeable.",
@@ -99,11 +216,27 @@ var Products = []Product{
 		Key: "vks", ID: 1794, Name: "vSphere Kubernetes Service", Label: "VKS",
 		Scheme: SchemeGeneric, Example: "3.7.0+v1.36",
 		K8sMinorRun: 1, UpgradeOrder: 6,
+		// Queried by description, not by name: the "VMware vSphere Kubernetes Service"
+		// bucket is missing 3.4.1+v1.33 and 3.5.1+v1.34, which file under "Tanzu
+		// Kubernetes Runtime" instead. The description collects all of them, duplicated
+		// across every portfolio bucket that ships VKS.
+		Lifecycle: Lifecycle{
+			Description:         "vSphere Kubernetes Service",
+			NoTechnicalGuidance: true,
+		},
 	},
 	{
 		Key: "vkr", ID: 820, Name: "vSphere Kubernetes releases", Label: "VKr",
 		Scheme: SchemeGeneric, Example: "1.36.1",
 		K8sMinorRun: 0, UpgradeOrder: 7,
+		// The one product that has to be queried by name: VKr's description is written
+		// per release ("VKr 1.32", "TKr 1.28.15 for vSphere 8.x"), so it cannot be a
+		// filter. Rows are per Kubernetes minor, so 1.32 answers for 1.32.0 to 1.32.10.
+		Lifecycle: Lifecycle{
+			ProductName:         "vSphere Kubernetes releases",
+			Match:               MatchMinor,
+			NoTechnicalGuidance: true,
+		},
 	},
 }
 
@@ -335,6 +468,45 @@ var Edges = []Edge{
 	},
 }
 
+// Lookups are built once from the tables above. Products is a handful of entries, so a
+// linear scan reads fine, but these are called from the solver's inner loop: Constrains
+// alone was two scans per edge per call, and a range loop copies each Product, which is
+// not a small struct. Indexing once turns the hot path into a map hit.
+var (
+	byKey        map[string]Product
+	byID         map[int]Product
+	constrainsBy map[[2]int]bool
+)
+
+func init() {
+	byKey = make(map[string]Product, len(Products))
+	byID = make(map[int]Product, len(Products))
+	for _, p := range Products {
+		byKey[p.Key] = p
+		byID[p.ID] = p
+	}
+
+	constrainsBy = make(map[[2]int]bool)
+	for _, e := range Edges {
+		if !e.Primary {
+			continue
+		}
+		from, fromOK := byKey[e.From]
+		to, toOK := byKey[e.To]
+		if !fromOK || !toOK {
+			continue
+		}
+		constrainsBy[orderedIDs(from.ID, to.ID)] = true
+	}
+}
+
+func orderedIDs(a, b int) [2]int {
+	if a > b {
+		a, b = b, a
+	}
+	return [2]int{a, b}
+}
+
 // Constrains reports whether a pair is allowed to decide a stack.
 //
 // This is deliberately not the same as "is a real dependency". ESX × NSX is a real
@@ -343,38 +515,19 @@ var Edges = []Edge{
 // enforceable-looking, and not a dependency at all. Both are looked up and reported; only
 // the pairs marked Primary include or exclude anything.
 func Constrains(aProductID, bProductID int) bool {
-	for _, e := range Edges {
-		if !e.Primary {
-			continue
-		}
-		from, _ := ByKey(e.From)
-		to, _ := ByKey(e.To)
-		if (from.ID == aProductID && to.ID == bProductID) ||
-			(from.ID == bProductID && to.ID == aProductID) {
-			return true
-		}
-	}
-	return false
+	return constrainsBy[orderedIDs(aProductID, bProductID)]
 }
 
 // ByKey returns the product with the given short key.
 func ByKey(key string) (Product, bool) {
-	for _, p := range Products {
-		if p.Key == key {
-			return p, true
-		}
-	}
-	return Product{}, false
+	p, ok := byKey[key]
+	return p, ok
 }
 
 // ByID returns the product with the given upstream product id.
 func ByID(id int) (Product, bool) {
-	for _, p := range Products {
-		if p.ID == id {
-			return p, true
-		}
-	}
-	return Product{}, false
+	p, ok := byID[id]
+	return p, ok
 }
 
 // IDs returns the upstream product ids of every product in scope.

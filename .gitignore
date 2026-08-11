@@ -1,5 +1,7 @@
 /vkstack
 /dist/
+# Compiled test binaries left behind by `go test -cpuprofile`.
+*.test
 # Packages staged from a goreleaser build by npm/build.mjs — release output, not source.
 /npm/staging/
 *.db

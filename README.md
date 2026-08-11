@@ -1,16 +1,22 @@
 # vkstack
 
-Compatibility across vCenter, ESX, vSphere Supervisor, VKS and VKr — plus optional NSX
-and Avi Load Balancer — from the Broadcom Product Interoperability Matrix.
+Compatibility across vCenter, ESX, vSphere Supervisor, VKS and VKr (plus optional NSX
+and Avi Load Balancer), from the Broadcom Product Interoperability Matrix, with support
+dates from the Broadcom Product Lifecycle matrix.
 
 > **Unofficial.** Not affiliated with or endorsed by Broadcom. Broadcom publishes no
-> public API for the interoperability matrix, so this calls the same private JSON
-> endpoint the matrix website's own front end calls, with the auth key that site ships
-> in its public JavaScript. There is no login, and none of your credentials are involved.
-> That key is never bundled into this tool or written to disk: each `refresh` derives it
-> from the live site and then discards it. The endpoint is undocumented, so it can change
-> or stop working without notice. The matrix itself is the authority, so verify anything
-> you are relying on at <https://interopmatrix.broadcom.com>.
+> public API for either matrix, so this calls the same private JSON endpoints their own
+> front ends call. Neither involves a login or any credential of yours.
+>
+> The interoperability endpoint wants an auth key, which the matrix site ships in its
+> public JavaScript. That key is never bundled into this tool or written to disk: each
+> `refresh` derives it from the live site and then discards it. The lifecycle endpoint
+> needs no key at all.
+>
+> Both are undocumented and can change or stop working without notice. The matrices
+> themselves are the authority, so verify anything you are relying on at
+> <https://interopmatrix.broadcom.com> and
+> <https://support.broadcom.com/group/ecx/productlifecycle>.
 
 The matrix answers one question at a time: is A compatible with B. This answers the
 question people usually have instead, which is what the whole valid stack looks like.
@@ -74,7 +80,7 @@ grab an archive from the [releases page](https://github.com/warroyo/vkstack/rele
 
 ## Wiring it into an agent
 
-Nothing to install first — this is the whole setup, in any client that reads an
+Nothing to install first. This is the whole setup, in any client that reads an
 `mcpServers` object:
 
 ```json
@@ -107,7 +113,7 @@ the binary.
 |---|---|
 | `describe` | The whole agent-facing surface (commands, schemas, exit codes) as JSON |
 | `explain` | The dependency model (JSON; `--human` for prose, `--ascii` for a bare terminal) |
-| `refresh` | Pull the matrix into `~/.cache/vkstack/vkstack.db` |
+| `refresh` | Pull both matrices into `~/.cache/vkstack/vkstack.db` |
 | `stack <product> <version>` | Solve a whole valid stack from one or more pinned versions (`--with nsx,avi` to include the optional components) |
 | `compat <product> <version>` | The raw pairwise answer for one release |
 | `check --vcenter … --esx …` | Validate a fully pinned stack; exit 6 if incompatible |
@@ -152,10 +158,10 @@ ordinary deployment.
 The matrix also publishes vCenter against VKS, vCenter against VKr, and ESX against Avi.
 Those are worth looking up, but they are not dependencies, because VKS runs on the
 Supervisor, VKr is provisioned by VKS, and Avi's service engines are placed through
-vCenter — so they are reported and never enforced. Enforcing them produces combinations
+vCenter, so they are reported and never enforced. Enforcing them produces combinations
 that are listed compatible yet cannot exist: vCenter 9.0.0.0 and VKS 3.7 are listed
 together, but vCenter 9.0.0.0 tops out at Supervisor 1.30 while VKS 3.7 needs 1.32, so
-there is no Supervisor to put in the middle. ESX × Avi fails the other way — the grid is
+there is no Supervisor to put in the middle. ESX × Avi fails the other way: the grid is
 so nearly empty that enforcing it would leave one legal combination.
 
 A node is lit when a complete valid stack exists containing it and your selection,
@@ -177,8 +183,8 @@ Four things are grouped deliberately.
   deployment. Each train is its own node, badged `vsc9` / `vsc0`, so the two never read
   as one version. Which trains a vCenter accepts comes from the matrix rather than from
   a rule of ours: vCenter 9.1.0.0300 accepts both.
-- vCenter is not collapsed by patch. 8.0U3 supports Supervisor 1.26–1.28 while 8.0U3k
-  supports 1.31–1.33, so hiding the patch letter would throw away the answer.
+- vCenter is not collapsed by patch. 8.0U3 supports Supervisor 1.26 to 1.28 while 8.0U3k
+  supports 1.31 to 1.33, so hiding the patch letter would throw away the answer.
 - ESX is not a layer. Its release lines are identical to vCenter's and it has no
   published data against VKS or VKr, so it appears as "on ESX 9.1 · 9.0 · 8.0U3" under
   each vCenter node instead of a row nobody can branch from.
@@ -188,7 +194,7 @@ Four things are grouped deliberately.
 
 ### Support lifecycle
 
-The matrix publishes a support phase on every release, and the map colours it:
+Every release gets a support phase, and the map colours it:
 
 | | |
 |---|---|
@@ -196,15 +202,52 @@ The matrix publishes a support phase on every release, and the map colours it:
 | Technical Guidance | amber, tagged `TG`; General Support has ended, no new fixes |
 | End of Support | red and struck through, tagged `EOS` |
 
+Two sources answer this, and where they disagree the dates win.
+
+The interop matrix carries two flags on every release (`techGuided`, `genGuided`), and
+that is all it publishes: no dates of any kind. Those flags lag badly. At the time of
+writing every VKr 1.32 build still claims General Support five months after that line
+went out of general support, and every vCenter `7.0U3` patch claims it ten months past
+its own date. For the Kubernetes layer they are close to useless: Supervisor, VKS and
+Avi have never had a release leave General Support, and VKr has never had one reach End
+of Support.
+
+So `vkstack` also mirrors the [Broadcom Product Lifecycle
+portal](https://support.broadcom.com/group/ecx/productlifecycle), which publishes real
+dates. `vkstack releases <product>` shows them in an `EOGS` column, and the JSON and MCP
+answers carry `eogsDate`, `eotgDate` and a `phaseSource` naming which source decided.
+
+The rules, in order:
+
+1. End of technical guidance published and passed → End of Support.
+2. End of general support passed, no technical guidance period for this product (VKr and
+   VKS: Broadcom publishes none and offers none) → End of Support.
+3. End of general support passed otherwise → Technical Guidance. vSphere's technical
+   guidance is real and long (8.x ends general support 2027-10-11 and technical guidance
+   only in 2029), so an absent date must not be read as "dead".
+4. Nothing published → the matrix flags, unchanged.
+
+A release the matrix has already retired stays retired, whatever the dates say.
+
+The Supervisor has no lifecycle data at all. The portal has no entry for it under any
+name, since it ships inside vCenter and VCF, so it is the one product still judged
+solely by the matrix flags.
+
+The two sources also disagree about granularity. VKr is published per Kubernetes minor,
+so `1.32` is what answers for 1.32.0 through 1.32.10, and vCenter's `8.0U3` answers for
+every `8.0U3x` patch.
+
 "Legacy" means the same thing here as on the interop site: nothing left in General
-Support. The site's *hide legacy releases* checkbox maps onto the same two flags this
-uses (`isHideGenSupported` and `isHideTechSupported`), so the **Hide legacy releases**
-toggle mirrors it, on by default. On the CLI, `vkstack releases <product> --legacy`
-includes them.
+Support. The site's *hide legacy releases* checkbox maps onto the two matrix flags, so
+the **Hide legacy releases** toggle mirrors it, on by default. One difference: a release
+retired by a published date is hidden here and still shown there. On the CLI,
+`vkstack releases <product> --legacy` includes them.
 
 A grouped node keeps the best phase among its releases as its headline, because the line
-really is still usable, but it names its worst too, so a green node covering an End of
-Support build cannot be picked from blind.
+really is still usable, but it names its worst too, so a node covering an End of Support
+build cannot be picked from blind. That applies to an amber node as much as a green one:
+VKr `1.26` reads Technical Guidance off a single build upstream mislabelled, while the
+other five went End of Support in January 2025.
 
 The toggle filters the *picture*, not the solver. So "Newest working stack from here" can
 name a release the map is hiding; it carries the phase of every release in it and says
@@ -306,14 +349,14 @@ republished from GitHub Actions on every push to `main`, on every release, and n
 pick up upstream. The page footer names the build that generated it.
 
 This works because the map pins one version at a time, so the questions it can ask are
-finite: the build drives all 65 of them — the unpinned map plus one per clickable node —
+finite: the build drives all 65 of them (the unpinned map plus one per clickable node)
 through the same handlers `serve` uses and ships the answers alongside the page. The
 generated site and a hosted one cannot disagree, because the same code produced both.
 Selecting a version becomes a lookup rather than a round trip.
 
 Opening NSX or Avi changes every answer on the map, not a corner of it, so each
-combination of open optional layers gets its own bundle — `data.json`, `data-nsx.json`,
-`data-avi.json`, `data-nsx-avi.json` — and the page fetches only the one it is showing.
+combination of open optional layers gets its own bundle (`data.json`, `data-nsx.json`,
+`data-avi.json`, `data-nsx-avi.json`), and the page fetches only the one it is showing.
 Most readers run neither, and they should not download the other three states to find
 that out.
 
@@ -330,9 +373,9 @@ nothing running that could refresh itself.
 NSX and Avi are optional, and independent of each other. Neither appears in a solved
 stack unless you pin it or ask for it, because neither is in every deployment: a
 Supervisor runs on NSX networking, or on a vSphere Distributed Switch with Avi in front
-of it, or on neither. Asking for one never brings in the other — **Avi does not require
-NSX** — and a stack that says nothing about NSX is a complete answer about the five core
-components, not a claim that you have no NSX.
+of it, or on neither. Asking for one never brings in the other, since **Avi does not
+require NSX**, and a stack that says nothing about NSX is a complete answer about the
+five core components, not a claim that you have no NSX.
 
 ```sh
 vkstack stack vcenter 9.1.0.0300 --with nsx        # NSX, no Avi
@@ -350,7 +393,7 @@ stack is never reported as verified on a pair that was never published. The
 Supervisor × VKr gap is the one that matters, and it is inferred through vCenter and VKS.
 
 One published pair is deliberately never enforced: ESX × Avi exists upstream but is
-nearly empty — three cells in the whole grid say yes. Avi's service engines are placed
+nearly empty: three cells in the whole grid say yes. Avi's service engines are placed
 through vCenter, so vCenter is the pair that decides. Enforcing ESX × Avi would rule out
 Avi deployments that plainly work, so it is reported and never used to include or exclude.
 
@@ -362,7 +405,7 @@ never listed together, rather than solving a stack around a combination nobody p
 
 Only vCenter and ESX 8.0 U3 and later are in scope. Supervisor, VKS, VKr, NSX and Avi
 have no hardcoded floor; they are filtered by reachability instead, so anything that only
-ever worked with vSphere 7 drops out on its own — which is what retires the older NSX and
+ever worked with vSphere 7 drops out on its own. That is what retires the older NSX and
 Avi lines without inventing a cutoff. `--all-versions` disables the floor and
 `--min-version vcenter=9.0.0.0` moves it. The floor is applied when the cache is read, not
 when it is written, so changing it never needs a refetch.
@@ -373,8 +416,8 @@ else**. That is not a simplification: every other component crosses the line in 
 published data. ESX 8.x pairs with vCenter 9 in the hundreds of rows, NSX 4.x has more
 compatible vCenter 9 pairs than NSX 9.x does, the Supervisor's `vsc0` train serves both,
 and Avi 31.x spans them. So a generation filters vCenter, and everything else is kept or
-dropped by whether it can still reach a surviving vCenter — which means a component that
-genuinely works with both appears under both, because it does.
+dropped by whether it can still reach a surviving vCenter. A component that genuinely
+works with both appears under both, because it does.
 
 ## Layout
 
@@ -384,14 +427,14 @@ internal/model/     the conceptual dependency model; emits the mermaid diagram
                     used by `graph` and docs/model.md
 internal/version/   two version schemes (see below)
 internal/api/       client for the JSON API behind the interop SPA
-internal/store/     SQLite cache — a dumb mirror of what upstream returned
+internal/store/     SQLite cache: a dumb mirror of what upstream returned
 internal/graph/     in-memory queries: compat, check, stack solving
 internal/cli/       cobra commands; output.go holds the agent-facing contract,
                     describe.go the surface document, mcp.go the stdio MCP server
 internal/web/       localhost UI, assets embedded
 npm/                the npm face: bin/vkstack.js launches the right prebuilt
                     binary, build.mjs stages the packages from a goreleaser build
-docs/model.md       generated from internal/model — do not edit by hand
+docs/model.md       generated from internal/model, do not edit by hand
 AGENTS.md           the contract for programs calling this tool
 ```
 

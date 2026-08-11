@@ -142,7 +142,7 @@ func newReleasesCmd() *cobra.Command {
 				}
 				// Match the interop site's default: legacy releases are hidden unless
 				// asked for.
-				if !r.Phase().Supported() && !legacy {
+				if !r.EffectivePhase().Supported() && !legacy {
 					continue
 				}
 				releases = append(releases, r)
@@ -157,10 +157,11 @@ func newReleasesCmd() *cobra.Command {
 				return releasesCSV(cmd, p.Key, releases)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "VERSION\tTYPE\tGA\tSUPPORT")
+			fmt.Fprintln(tw, "VERSION\tTYPE\tGA\tEOGS\tSUPPORT")
 			for _, r := range releases {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
-					r.Raw, r.ReleaseType, gaDate(r.GADate), r.Phase().Label())
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+					r.Raw, r.ReleaseType, shortDate(r.GADate), shortDate(r.EOGSDate),
+					r.EffectivePhase().Label())
 			}
 			return tw.Flush()
 		},
@@ -918,7 +919,8 @@ func checkJSON(res graph.CheckResult) map[string]any {
 	}
 }
 
-func gaDate(ms int64) string {
+// shortDate renders an epoch-ms date, or "-" when upstream published none.
+func shortDate(ms int64) string {
 	if ms == 0 {
 		return "-"
 	}

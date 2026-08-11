@@ -36,6 +36,10 @@ type Client struct {
 	AuthKey string
 	HTTP    *http.Client
 
+	// Lifecycle is the Product Lifecycle portal client a refresh uses for published
+	// support dates. Nil means the production portal; tests point it at a fixture.
+	Lifecycle *LifecycleClient
+
 	mu sync.Mutex
 	// basePinned and keyPinned record that the caller supplied the value, so discovery
 	// must not overwrite it. A pinned key also disables the rotation retry: whoever

@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite" // pure-Go driver: no cgo, so the binary stays static
 )
 
-const schemaVersion = "1"
+const schemaVersion = "2"
 
 // Status codes as published by the interop API.
 const (
@@ -62,6 +62,25 @@ type PairCoverage struct {
 	AProduct  int
 	BProduct  int
 	EdgeCount int
+	FetchedAt int64
+}
+
+// Lifecycle is one published support-date row, mirrored from the Broadcom Product
+// Lifecycle portal. This is a second, independent source from the interop matrix and is
+// kept in its own table so the two are never confused.
+//
+// ReleaseKey is the portal's own release string, not an interop release id: the two
+// sources disagree about granularity (the portal publishes VKr per Kubernetes minor and
+// ESX per major line), so the join happens in memory at load time.
+type Lifecycle struct {
+	ProductKey string
+	ReleaseKey string
+	GADate     int64 // epoch ms
+	// EOGSDate is end of general support, the portal's dropSupportDate.
+	EOGSDate int64
+	// EOTGDate is end of technical guidance, the portal's eolDate. Rarely published.
+	EOTGDate  int64
+	Source    string // "productName|description" the row came from
 	FetchedAt int64
 }
 
@@ -139,6 +158,16 @@ CREATE TABLE IF NOT EXISTS pair_coverage(
   fetched_at INTEGER NOT NULL,
   PRIMARY KEY(a_product, b_product));
 
+CREATE TABLE IF NOT EXISTS lifecycle(
+  product_key TEXT NOT NULL,
+  release_key TEXT NOT NULL,
+  ga_date     INTEGER,
+  eogs_date   INTEGER,
+  eotg_date   INTEGER,
+  source      TEXT NOT NULL,
+  fetched_at  INTEGER NOT NULL,
+  PRIMARY KEY(product_key, release_key));
+
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 
 CREATE INDEX IF NOT EXISTS idx_releases_product ON releases(product_id);
@@ -156,11 +185,18 @@ func (db *DB) migrate() error {
 	if got == "" {
 		return db.SetMeta("schema_version", schemaVersion)
 	}
-	if got != schemaVersion {
-		return fmt.Errorf("cache at %s uses schema version %s, this build expects %s — run `vkstack cache clear`",
-			db.path, got, schemaVersion)
+	if got == schemaVersion {
+		return nil
 	}
-	return nil
+	// Version 2 only added the lifecycle table, which the schema above has just created.
+	// Everything a version 1 cache holds is still valid, and an empty lifecycle table
+	// simply means every release falls back to the matrix flags until the next refresh —
+	// so upgrade in place rather than making people re-fetch 118k edges.
+	if got == "1" {
+		return db.SetMeta("schema_version", schemaVersion)
+	}
+	return fmt.Errorf("cache at %s uses schema version %s, this build expects %s — run `vkstack cache clear`",
+		db.path, got, schemaVersion)
 }
 
 // Meta reads a metadata value, returning "" if absent.
@@ -205,7 +241,7 @@ func (db *DB) FetchedAt() (time.Time, error) {
 // Counts returns the number of rows in each populated table, for `cache info`.
 func (db *DB) Counts() (map[string]int, error) {
 	out := map[string]int{}
-	for _, t := range []string{"products", "releases", "compat", "pair_coverage"} {
+	for _, t := range []string{"products", "releases", "compat", "pair_coverage", "lifecycle"} {
 		var n int
 		if err := db.sql.QueryRow(`SELECT count(*) FROM ` + t).Scan(&n); err != nil {
 			return nil, fmt.Errorf("counting %s: %w", t, err)

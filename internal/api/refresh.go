@@ -22,7 +22,7 @@ func Refresh(ctx context.Context, c *Client, db *store.DB, progress Progress) er
 		progress = func(int, int, string) {}
 	}
 	pairs := model.Pairs()
-	total := 1 + len(pairs)
+	total := 2 + len(pairs)
 
 	// This first call is also what discovers the auth key: the client has none until a
 	// request needs one, and a rotation is handled inside the client, not here.
@@ -106,11 +106,100 @@ func Refresh(ctx context.Context, c *Client, db *store.DB, progress Progress) er
 		}
 	}
 
+	progress(total-1, total, "fetching published support dates")
+	if err := refreshLifecycle(ctx, c.lifecycleClient(), w, progress, total); err != nil {
+		// A lifecycle failure must not cost us a good matrix refresh. The previous rows
+		// stay in place and every release falls back to the matrix flags.
+		progress(total-1, total, fmt.Sprintf("skipping support dates: %v", err))
+	}
+
 	if err := w.Commit(c.Base); err != nil {
 		return err
 	}
 	progress(total, total, "done")
 	return nil
+}
+
+func (c *Client) lifecycleClient() *LifecycleClient {
+	if c.Lifecycle != nil {
+		return c.Lifecycle
+	}
+	return NewLifecycle("")
+}
+
+// refreshLifecycle mirrors published support dates for every product the portal covers.
+//
+// Rows are stored unfiltered by version, keeping this package's habit of mirroring
+// upstream verbatim and leaving the supported-version floor to internal/graph, so moving
+// the floor never requires a refetch.
+func refreshLifecycle(ctx context.Context, lc *LifecycleClient, w *store.Writer, progress Progress, total int) error {
+	for _, p := range model.Products {
+		if !p.Lifecycle.Sourced() {
+			continue
+		}
+		rows, err := lc.Rows(ctx, p.Lifecycle.ProductName, p.Lifecycle.Description)
+		if err != nil {
+			return fmt.Errorf("fetching %s support dates: %w", p.Label, err)
+		}
+
+		kept, conflicts := dedupeLifecycle(rows, p)
+		if err := w.ClearLifecycle(p.Key); err != nil {
+			return err
+		}
+		for _, l := range kept {
+			if err := w.PutLifecycle(l); err != nil {
+				return err
+			}
+		}
+		if conflicts > 0 {
+			// The portal repeats a release once per portfolio bucket it ships in, and
+			// those copies have always agreed. A disagreement means the source changed
+			// shape and the join needs another look.
+			progress(total-1, total, fmt.Sprintf(
+				"%s: %d releases published with conflicting dates, kept the first", p.Label, conflicts))
+		}
+	}
+	return nil
+}
+
+// dedupeLifecycle collapses the portal's repeated rows to one per release, dropping rows
+// belonging to other products and rows carrying no dates at all.
+func dedupeLifecycle(rows []LifecycleRow, p model.Product) ([]store.Lifecycle, int) {
+	byRelease := map[string]store.Lifecycle{}
+	var order []string
+	conflicts := 0
+
+	for _, r := range rows {
+		if r.Release == "" || !p.Lifecycle.Keeps(r.Description) {
+			continue
+		}
+		l := store.Lifecycle{
+			ProductKey: p.Key,
+			ReleaseKey: r.Release,
+			GADate:     ParseLifecycleDate(r.GADate),
+			EOGSDate:   ParseLifecycleDate(r.DropSupport),
+			EOTGDate:   ParseLifecycleDate(r.EOLDate),
+			Source:     r.ProductName + "|" + r.Description,
+		}
+		if l.GADate == 0 && l.EOGSDate == 0 && l.EOTGDate == 0 {
+			continue // a listing with no published dates says nothing
+		}
+		prev, seen := byRelease[r.Release]
+		if !seen {
+			byRelease[r.Release] = l
+			order = append(order, r.Release)
+			continue
+		}
+		if prev.GADate != l.GADate || prev.EOGSDate != l.EOGSDate || prev.EOTGDate != l.EOTGDate {
+			conflicts++
+		}
+	}
+
+	out := make([]store.Lifecycle, 0, len(order))
+	for _, rel := range order {
+		out = append(out, byRelease[rel])
+	}
+	return out, conflicts
 }
 
 func toStoreRelease(r Release, productID int) store.Release {

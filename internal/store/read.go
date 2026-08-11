@@ -8,10 +8,11 @@ import (
 // (a few hundred releases, tens of thousands of edges), so every command reads it whole
 // and answers from memory rather than issuing SQL per query.
 type Snapshot struct {
-	Products []Product
-	Releases []Release
-	Compat   []Compat
-	Coverage []PairCoverage
+	Products  []Product
+	Releases  []Release
+	Compat    []Compat
+	Coverage  []PairCoverage
+	Lifecycle []Lifecycle
 	// FetchedAt is when the cache was last completely refreshed, in epoch ms.
 	FetchedAt int64
 }
@@ -86,6 +87,24 @@ func (db *DB) Load() (*Snapshot, error) {
 	}
 	if err := covRows.Err(); err != nil {
 		return nil, fmt.Errorf("loading pair coverage: %w", err)
+	}
+
+	lcRows, err := db.sql.Query(`SELECT product_key, release_key, COALESCE(ga_date,0), COALESCE(eogs_date,0),
+		COALESCE(eotg_date,0), COALESCE(source,''), fetched_at FROM lifecycle`)
+	if err != nil {
+		return nil, fmt.Errorf("loading lifecycle: %w", err)
+	}
+	defer lcRows.Close()
+	for lcRows.Next() {
+		var l Lifecycle
+		if err := lcRows.Scan(&l.ProductKey, &l.ReleaseKey, &l.GADate, &l.EOGSDate,
+			&l.EOTGDate, &l.Source, &l.FetchedAt); err != nil {
+			return nil, fmt.Errorf("scanning lifecycle: %w", err)
+		}
+		s.Lifecycle = append(s.Lifecycle, l)
+	}
+	if err := lcRows.Err(); err != nil {
+		return nil, fmt.Errorf("loading lifecycle: %w", err)
 	}
 
 	at, err := db.FetchedAt()

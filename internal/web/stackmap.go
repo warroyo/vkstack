@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/warroyo/vkstack/internal/graph"
 	"github.com/warroyo/vkstack/internal/model"
@@ -196,9 +197,15 @@ type mapNode struct {
 	WorstPhaseLabel string `json:"worstPhaseLabel,omitempty"`
 	// Mixed marks a node whose releases do not all sit in the same support phase.
 	Mixed bool `json:"mixed,omitempty"`
-	// Legacy marks a node with nothing left in General Support — what the interop
-	// site's "hide legacy releases" checkbox removes.
+	// Legacy marks a node with nothing left in General Support.
 	Legacy bool `json:"legacy,omitempty"`
+	// PhaseSource is "lifecycle" when a published date, rather than the matrix flags,
+	// is what retired this node. It matters for the wording: the interop site's "hide
+	// legacy releases" checkbox does *not* remove these — the matrix still lists VKr
+	// 1.32 as generally supported months after its published end of general support.
+	PhaseSource string `json:"phaseSource,omitempty"`
+	// EOGS is the published end of general support behind the headline phase, if any.
+	EOGS string `json:"eogs,omitempty"`
 	// NoData marks a release upstream has published nothing for yet — usually one that
 	// has not shipped. Distinct from "nothing is compatible".
 	NoData bool `json:"noData,omitempty"`
@@ -432,12 +439,13 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 				if rel == nil {
 					continue
 				}
-				phase := rel.Phase()
+				phase := rel.EffectivePhase()
 				recommended[p.Key] = map[string]any{
 					"version":    rel.Raw,
 					"phase":      string(phase),
 					"phaseLabel": phase.Label(),
 					"legacy":     !phase.Supported(),
+					"eogs":       lifecycleDate(rel.EOGSDate),
 				}
 			}
 			resp["recommended"] = recommended
@@ -550,12 +558,26 @@ func phaseNotes(rels []*graph.Release) []string {
 	out := make([]string, 0, len(rels))
 	for _, r := range rels {
 		note := r.Raw
-		if p := r.Phase(); !p.Supported() {
+		if p := r.EffectivePhase(); !p.Supported() {
 			note += " · " + p.Label()
+			// Name the date that decided it. "End of Support" alone invites the reply
+			// that the interop matrix still lists the release as supported — which it
+			// does, and which is exactly why the date is the more useful fact.
+			if d := lifecycleDate(r.EOGSDate); d != "" {
+				note += " (general support ended " + d + ")"
+			}
 		}
 		out = append(out, note)
 	}
 	return out
+}
+
+// lifecycleDate renders a published date, or "" when the portal published none.
+func lifecycleDate(ms int64) string {
+	if ms == 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).UTC().Format("2006-01-02")
 }
 
 // setProvenance records how well-founded a lit node actually is.
@@ -675,7 +697,7 @@ func describeSupervisor(rels []*graph.Release, pinnedVCenter string, vcenterRele
 		default:
 			labels = append(labels, e.release.Raw)
 		}
-		if p := e.release.Phase(); !p.Supported() {
+		if p := e.release.EffectivePhase(); !p.Supported() {
 			labels[len(labels)-1] += " · " + p.Label()
 		}
 	}
@@ -911,7 +933,7 @@ func stackExistsWith(
 func setPhase(node *mapNode, members []*graph.Release) {
 	best, worst := graph.PhaseEndOfSupport, graph.PhaseGeneral
 	for _, r := range members {
-		p := r.Phase()
+		p := r.EffectivePhase()
 		if phaseRank(p) > phaseRank(best) {
 			best = p
 		}
@@ -925,6 +947,21 @@ func setPhase(node *mapNode, members []*graph.Release) {
 	node.WorstPhaseLabel = worst.Label()
 	node.Mixed = best != worst
 	node.Legacy = !best.Supported()
+
+	// Attribute the headline to whichever release actually set it, so the peek can say
+	// how this node was retired rather than guessing. A node's members can disagree
+	// about the source as well as the phase — VKr 1.26 holds five builds retired by
+	// published date and one the portal never listed at all.
+	for _, r := range members {
+		if r.EffectivePhase() != best {
+			continue
+		}
+		if r.EffectivePhaseSource() == graph.SourceLifecycle {
+			node.PhaseSource = string(graph.SourceLifecycle)
+			node.EOGS = lifecycleDate(r.EOGSDate)
+			break
+		}
+	}
 }
 
 // phaseRank orders the lifecycle so best and worst are comparable. Higher is better.

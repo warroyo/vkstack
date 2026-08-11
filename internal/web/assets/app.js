@@ -1080,9 +1080,11 @@ function nodeButton(layer, node) {
     node.train ? el("span", { class: "train" }, node.train) : null,
     node.legacy ? el("span", { class: `phase-tag phase-${node.phase}` },
       node.phase === "end-of-support" ? "EOS" : "TG") : null,
-    // A line keeps its best phase as its headline, but a green node holding End of
-    // Support builds has to admit it, or picking one out of it is a coin toss.
-    !node.legacy && node.mixed
+    // A line keeps its best phase as its headline, but a node holding worse builds has
+    // to admit it, or picking one out of it is a coin toss. This applies to an amber
+    // node as much as a green one: VKr 1.26 reads Technical Guidance off a single build
+    // upstream mislabelled, while the other five went End of Support in January 2025.
+    node.mixed && node.worstPhase !== node.phase
       ? el("span", { class: `phase-tag phase-${node.worstPhase} is-mixed` },
           node.worstPhase === "end-of-support" ? "some EOS" : "some TG")
       : null,
@@ -1494,6 +1496,7 @@ function buildManifest() {
       version: pick.version,
       phase: pick.phase,
       phaseLabel: pick.phaseLabel,
+      eogs: pick.eogs || "",
       legacy: !!pick.legacy,
       pinned: !!state.pin && state.pin.product === key,
       why: EDGE_PROSE[key] || "",
@@ -1540,7 +1543,7 @@ function manifestMarkdown(m, audience) {
     lines.push(`Selection: ${m.selection}`, "");
     m.steps.forEach((s, i) => {
       lines.push(`${i + 1}. [ ] **${s.label}** \`${s.version}\`` +
-        (s.legacy ? `  ⚠ ${s.phaseLabel}` : "") +
+        (s.legacy ? `  ⚠ ${s.phaseLabel}${s.eogs ? ` since ${s.eogs}` : ""}` : "") +
         (s.pinned ? "  _(the version you pinned)_" : ""));
     });
     lines.push("", `Do not reorder. ${EDGE_PROSE.vcenter[0].toUpperCase()}` +
@@ -1548,10 +1551,11 @@ function manifestMarkdown(m, audience) {
   } else {
     lines.push(`# Target stack`, "");
     lines.push(`Selection: ${m.selection}`, "");
-    lines.push("| Order | Component | Version | Support phase | Why here |");
-    lines.push("|---|---|---|---|---|");
+    lines.push("| Order | Component | Version | Support phase | General support ends | Why here |");
+    lines.push("|---|---|---|---|---|---|");
     m.steps.forEach((s, i) => {
-      lines.push(`| ${i + 1} | ${s.label} | \`${s.version}\` | ${s.phaseLabel} | ${s.why} |`);
+      lines.push(`| ${i + 1} | ${s.label} | \`${s.version}\` | ${s.phaseLabel} | ` +
+        `${s.eogs || "not published"} | ${s.why} |`);
     });
     lines.push("");
     if (m.provenance) {
@@ -1690,12 +1694,18 @@ function peekParts(layer, node) {
   // Why this node hands over an older build than its newest. Placed with the other
   // head lines so it is read before the release list, not after it.
   if (node.pinNote) head.push(node.pinNote);
-  if (node.legacy) {
+  if (node.legacy && node.phaseSource === "lifecycle") {
+    // Do not blame the interop checkbox for this one: the matrix still lists these as
+    // generally supported. Broadcom's lifecycle matrix is what retired them.
+    head.push(`${node.phaseLabel}${node.eogs ? ` — general support ended ${node.eogs}` : ""}. ` +
+      `Broadcom's product lifecycle matrix retired this; the interoperability matrix ` +
+      `still lists it as supported.`);
+  } else if (node.legacy) {
     head.push(`${node.phaseLabel} — this is what the interop site's ` +
       `"hide legacy releases" checkbox removes.`);
-  } else if (node.mixed) {
-    head.push(`${node.phaseLabel}, but not every build in this line: the oldest is ` +
-      `${node.worstPhaseLabel}.`);
+  }
+  if (node.mixed && node.worstPhase !== node.phase) {
+    head.push(`Not every build in this line: the oldest is ${node.worstPhaseLabel}.`);
   }
   // Where the warrant is weaker than a tested lookup, name the pair. "Not tested" with
   // no pair attached reads as a claim about this product when it may be about another.

@@ -16,6 +16,7 @@ type Writer struct {
 	releases     *sql.Stmt
 	compat       *sql.Stmt
 	pairCoverage *sql.Stmt
+	lifecycle    *sql.Stmt
 }
 
 // BeginWrite starts a refresh transaction.
@@ -47,6 +48,14 @@ func (db *DB) BeginWrite() (*Writer, error) {
 			ON CONFLICT(a_release, b_release) DO UPDATE SET status=excluded.status, footnotes=excluded.footnotes`},
 		{&w.pairCoverage, `INSERT INTO pair_coverage(a_product, b_product, edge_count, fetched_at) VALUES(?,?,?,?)
 			ON CONFLICT(a_product, b_product) DO UPDATE SET edge_count=excluded.edge_count, fetched_at=excluded.fetched_at`},
+		{&w.lifecycle, `INSERT INTO lifecycle(product_key, release_key, ga_date, eogs_date, eotg_date, source, fetched_at)
+			VALUES(?,?,?,?,?,?,?)
+			ON CONFLICT(product_key, release_key) DO UPDATE SET
+				ga_date=excluded.ga_date,
+				eogs_date=excluded.eogs_date,
+				eotg_date=excluded.eotg_date,
+				source=excluded.source,
+				fetched_at=excluded.fetched_at`},
 	}
 	for _, s := range stmts {
 		st, err := tx.Prepare(s.sql)
@@ -101,6 +110,25 @@ func (w *Writer) PutPairCoverage(aProduct, bProduct, edgeCount int) error {
 	_, err := w.pairCoverage.Exec(aProduct, bProduct, edgeCount, time.Now().UnixMilli())
 	if err != nil {
 		return fmt.Errorf("recording coverage %d/%d: %w", aProduct, bProduct, err)
+	}
+	return nil
+}
+
+// PutLifecycle upserts one published lifecycle row.
+func (w *Writer) PutLifecycle(l Lifecycle) error {
+	_, err := w.lifecycle.Exec(l.ProductKey, l.ReleaseKey, l.GADate, l.EOGSDate, l.EOTGDate,
+		l.Source, time.Now().UnixMilli())
+	if err != nil {
+		return fmt.Errorf("upserting lifecycle %s/%s: %w", l.ProductKey, l.ReleaseKey, err)
+	}
+	return nil
+}
+
+// ClearLifecycle drops a product's lifecycle rows before its rows are rewritten, so a
+// release the portal has stopped publishing does not linger behind the upsert.
+func (w *Writer) ClearLifecycle(productKey string) error {
+	if _, err := w.tx.Exec(`DELETE FROM lifecycle WHERE product_key = ?`, productKey); err != nil {
+		return fmt.Errorf("clearing lifecycle for %s: %w", productKey, err)
 	}
 	return nil
 }

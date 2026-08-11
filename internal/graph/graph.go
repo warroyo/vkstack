@@ -5,18 +5,23 @@
 package graph
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/warroyo/vkstack/internal/model"
 	"github.com/warroyo/vkstack/internal/store"
 	"github.com/warroyo/vkstack/internal/version"
 )
 
-// SupportPhase is where a release sits in its support lifecycle, as published by the
-// interop matrix. The matrix carries this on every release as two flags; it is not a
-// separate source and nothing here is inferred from dates.
+// SupportPhase is where a release sits in its support lifecycle.
+//
+// Two independent sources answer this. The interop matrix carries two flags on every
+// release, and the Broadcom Product Lifecycle portal publishes dates. Where both speak,
+// the dates win: the flags lag badly, still calling VKr 1.32 generally supported months
+// after its published end of general support, and every vCenter 7.0U3 patch likewise.
 type SupportPhase string
 
 const (
@@ -45,6 +50,17 @@ func (p SupportPhase) Label() string {
 // Supported reports whether a release is still in General Support.
 func (p SupportPhase) Supported() bool { return p == PhaseGeneral }
 
+// PhaseSource names which of the two sources decided a release's phase.
+type PhaseSource string
+
+const (
+	// SourceMatrix: the interop matrix flags, because the portal publishes nothing for
+	// this release.
+	SourceMatrix PhaseSource = "matrix"
+	// SourceLifecycle: a published date that has passed.
+	SourceLifecycle PhaseSource = "lifecycle"
+)
+
 // Release is a release with its parsed version.
 type Release struct {
 	ID          int
@@ -57,9 +73,31 @@ type Release struct {
 	// TechGuided and GenGuided are the matrix's own support-phase flags.
 	TechGuided bool
 	GenGuided  bool
+
+	// EOGSDate is the published end of general support, and EOTGDate the published end
+	// of technical guidance, both epoch ms and both zero when the portal says nothing.
+	// EOTGDate is rarely published: Broadcom lists it for a couple of hundred releases
+	// across the whole portal and for none of the products here.
+	EOGSDate int64
+	EOTGDate int64
+	// LifecycleKey is the portal release string these dates were read from, kept so a
+	// coarse join ("1.32" answering for 1.32.10) can be shown rather than implied.
+	LifecycleKey string
+	// noTechnicalGuidance mirrors the product's own flag, so PhaseAt can decide what an
+	// absent end-of-technical-guidance date means for this release.
+	noTechnicalGuidance bool
+
+	// phase and phaseSource are PhaseAt and PhaseSourceAt evaluated once at load, so
+	// every view shares one answer and one clock. A long-running serve re-reads the
+	// cache on refresh, which re-evaluates them.
+	phase       SupportPhase
+	phaseSource PhaseSource
 }
 
-// Phase returns where this release sits in its support lifecycle.
+// Phase returns where this release sits according to the interop matrix alone.
+//
+// Kept flag-only and date-free on purpose: it is the raw upstream answer, and several
+// callers want exactly that. Anything user-facing should ask PhaseAt.
 func (r Release) Phase() SupportPhase {
 	switch {
 	case r.GenGuided:
@@ -69,6 +107,80 @@ func (r Release) Phase() SupportPhase {
 	default:
 		return PhaseEndOfSupport
 	}
+}
+
+// PhaseAt returns the support phase as of now, preferring published dates over the
+// matrix flags wherever the two disagree.
+//
+// A release never moves back up: a matrix flag saying End of Support is believed even
+// when no date has passed yet, because the flags do eventually retire a release and
+// nothing is gained by arguing with them in that direction.
+func (r Release) PhaseAt(now time.Time) SupportPhase {
+	flags := r.Phase()
+	ms := now.UnixMilli()
+
+	switch {
+	case r.EOTGDate > 0 && ms >= r.EOTGDate:
+		return PhaseEndOfSupport
+	case r.EOGSDate > 0 && ms >= r.EOGSDate:
+		// With no published end of technical guidance, what passing general support
+		// means depends on whether the product has a technical guidance period at all.
+		// VKr and VKS do not, so they are done; vSphere's runs years past this date.
+		if r.noTechnicalGuidance {
+			return PhaseEndOfSupport
+		}
+		if flags == PhaseEndOfSupport {
+			return PhaseEndOfSupport
+		}
+		return PhaseTechnicalGuidance
+	}
+	return flags
+}
+
+// PhaseSourceAt reports which source decided PhaseAt's answer.
+func (r Release) PhaseSourceAt(now time.Time) PhaseSource {
+	if r.PhaseAt(now) != r.Phase() {
+		return SourceLifecycle
+	}
+	return SourceMatrix
+}
+
+// EffectivePhase is the phase every view should show: the published dates where they
+// exist, the matrix flags otherwise. Evaluated once when the graph was loaded.
+//
+// A Release assembled outside Load has no stamped phase, so it falls back to the flags
+// rather than reporting the zero value as a phase in its own right.
+func (r Release) EffectivePhase() SupportPhase {
+	if r.phase == "" {
+		return r.Phase()
+	}
+	return r.phase
+}
+
+// EffectivePhaseSource names which source EffectivePhase came from.
+func (r Release) EffectivePhaseSource() PhaseSource {
+	if r.phaseSource == "" {
+		return SourceMatrix
+	}
+	return r.phaseSource
+}
+
+// MarshalJSON emits the resolved phase alongside the raw fields, so a JSON or MCP
+// consumer is never left to re-derive it from the flags — which is the very thing that
+// gives the wrong answer for a release whose published date has passed.
+func (r Release) MarshalJSON() ([]byte, error) {
+	type release Release // shed the method, keep the fields
+	return json.Marshal(struct {
+		release
+		Phase       SupportPhase `json:"phase"`
+		PhaseLabel  string       `json:"phaseLabel"`
+		PhaseSource PhaseSource  `json:"phaseSource"`
+	}{
+		release:     release(r),
+		Phase:       r.EffectivePhase(),
+		PhaseLabel:  r.EffectivePhase().Label(),
+		PhaseSource: r.EffectivePhaseSource(),
+	})
 }
 
 // IsPatch reports whether this is a patch release, which most views hide by default.
@@ -123,6 +235,9 @@ type Options struct {
 	// Only vCenter is filtered by its own version; see model.Generations for why. Every
 	// other product is kept or dropped by whether it can still reach a surviving vCenter.
 	Generation int
+	// Now is the clock the support phase is evaluated against. Zero means time.Now().
+	// Tests set it so a published date passing does not change their answers.
+	Now time.Time
 }
 
 // Load builds the in-memory graph from a cache snapshot, applying the version floor.
@@ -148,6 +263,12 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 		return nil, err
 	}
 
+	lifecycle := lifecycleIndexes(snap.Lifecycle)
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+
 	// Pass 1: parse every in-scope release and apply the explicit floors.
 	for i := range snap.Releases {
 		r := snap.Releases[i]
@@ -164,17 +285,24 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 			g.Excluded[r.ProductID]++
 			continue
 		}
-		g.Releases[r.ID] = &Release{
-			ID:          r.ID,
-			ProductID:   r.ProductID,
-			ProductKey:  p.Key,
-			Raw:         r.HybridVersion,
-			Version:     v,
-			ReleaseType: r.ReleaseType,
-			GADate:      r.GADate,
-			TechGuided:  r.TechGuided,
-			GenGuided:   r.GenGuided,
+		rel := &Release{
+			ID:                  r.ID,
+			ProductID:           r.ProductID,
+			ProductKey:          p.Key,
+			Raw:                 r.HybridVersion,
+			Version:             v,
+			ReleaseType:         r.ReleaseType,
+			GADate:              r.GADate,
+			TechGuided:          r.TechGuided,
+			GenGuided:           r.GenGuided,
+			noTechnicalGuidance: p.Lifecycle.NoTechnicalGuidance,
 		}
+		if l, ok := lifecycle[p.Key].lookup(r.HybridVersion, v, p.Lifecycle.Match); ok {
+			rel.EOGSDate, rel.EOTGDate, rel.LifecycleKey = l.EOGSDate, l.EOTGDate, l.ReleaseKey
+		}
+		rel.phase = rel.PhaseAt(now)
+		rel.phaseSource = rel.PhaseSourceAt(now)
+		g.Releases[r.ID] = rel
 	}
 
 	// Pass 2: keep edges where both endpoints survived, in both directions.

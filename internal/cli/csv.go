@@ -37,10 +37,13 @@ func releasesCSV(cmd *cobra.Command, product string, releases []*graph.Release) 
 	rows := make([][]string, 0, len(releases))
 	for _, r := range releases {
 		rows = append(rows, []string{
-			product, r.Raw, r.ReleaseType, gaDate(r.GADate), string(r.Phase()), r.Phase().Label(),
+			product, r.Raw, r.ReleaseType, shortDate(r.GADate), shortDate(r.EOGSDate), shortDate(r.EOTGDate),
+			string(r.EffectivePhase()), r.EffectivePhase().Label(), string(r.EffectivePhaseSource()),
 		})
 	}
-	return writeCSV(cmd, []string{"product", "version", "type", "ga", "phase", "phaseLabel"}, rows)
+	return writeCSV(cmd,
+		[]string{"product", "version", "type", "ga", "eogs", "eotg", "phase", "phaseLabel", "phaseSource"},
+		rows)
 }
 
 func compatCSV(cmd *cobra.Command, self model.Product, version string, groups []graph.CompatGroup) error {

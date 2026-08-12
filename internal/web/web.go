@@ -4,11 +4,14 @@
 package web
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/warroyo/vkstack/internal/graph"
@@ -76,8 +79,60 @@ func NewServer(cfg Config) (http.Handler, error) {
 	mux.HandleFunc("GET /api/graph", s.handleGraph)
 	mux.HandleFunc("GET /api/stackmap", s.handleStackMap)
 	mux.HandleFunc("POST /api/refresh", s.handleRefresh)
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+
+	static, err := staticHandler(sub)
+	if err != nil {
+		return nil, err
+	}
+	mux.Handle("/", static)
 	return mux, nil
+}
+
+// staticHandler serves the embedded UI with a content validator on every file.
+//
+// Files in an embed.FS all report a zero modification time, so http.FileServer sends
+// neither Last-Modified nor ETag and a browser has no way to tell a stylesheet that
+// changed from the one it already has — a UI fix can ship and still not be visible on a
+// reload. Hashing the bytes once at startup gives it something to revalidate against.
+//
+// The assets are served no-cache, which asks for revalidation rather than forbidding
+// storage: a reload costs a conditional request that usually answers 304, and a genuinely
+// changed file is picked up straight away. That is the right trade for filenames that
+// never change — there is no hashed asset name here to cache-bust with.
+func staticHandler(sub fs.FS) (http.Handler, error) {
+	etags := map[string]string{}
+	err := fs.WalkDir(sub, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(sub, p)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		// Half the digest is plenty to tell two versions of a file apart, and it keeps
+		// the header short.
+		etags["/"+p] = `"` + hex.EncodeToString(sum[:16]) + `"`
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("hashing embedded assets: %w", err)
+	}
+
+	files := http.FileServer(http.FS(sub))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if strings.HasSuffix(p, "/") {
+			p += "index.html"
+		}
+		// Setting the header before delegating is what arms the 304: http.ServeContent
+		// compares If-None-Match against whatever ETag is already on the response.
+		if tag, ok := etags[p]; ok {
+			w.Header().Set("ETag", tag)
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		files.ServeHTTP(w, r)
+	}), nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

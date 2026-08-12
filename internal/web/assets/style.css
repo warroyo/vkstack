@@ -2,13 +2,23 @@
    The page is deliberately quiet so that one thing can be loud: the lit load path
    through the layers. Everything else is hairlines and cool greys. */
 
+/* The grey ramp is three tiers deep and every tier carries text, so each one clears WCAG AA
+   (4.5:1) against both --surface and --panel. The values sit a step above that floor rather
+   than on it — the lowest tier lands near 6:1 — because AA on its own still reads as thin
+   grey-on-grey to people who asked for more contrast, and the headroom costs the design
+   nothing. internal/web/contrast_test.go asserts the AA floor and the tier ordering. */
 :root {
+  color-scheme: light dark;
+
   --surface: #eaeef3;
   --panel: #ffffff;
   --ink: #161c25;
-  --muted: #67748a;
-  --faint: #97a2b4;
+  --muted: #3a4354;
+  --faint: #4f596a;
   --hair: #ccd4e0;
+  /* --hair is a decorative divider and is deliberately below the 3:1 line. Anything that
+     bounds a control — an input, a button — uses --edge instead, which clears it. */
+  --edge: #7c8798;
 
   /* The only saturated colours on the page. Indigo marks the load path; green marks
      the single recommended stack. Nothing else is allowed to compete. */
@@ -24,6 +34,14 @@
   --eos: #9c2b30;
   --eos-soft: #f7e4e5;
 
+  /* Text that sits *on* an accent fill rather than beside it. It has to flip with the
+     theme: dark mode lightens every accent, so white-on-accent — which is fine here —
+     collapses to about 2:1 there. */
+  --on-accent: #ffffff;
+  /* Shadows are cast in the surface's own darkness, not a fixed near-black, or they
+     vanish against a dark panel. An r,g,b triple so callers pick their own alpha. */
+  --shadow: 10, 16, 28;
+
   --radius: 7px;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --step: 180ms;
@@ -34,9 +52,10 @@
     --surface: #10141b;
     --panel: #171d26;
     --ink: #e6eaf1;
-    --muted: #8f9cb0;
-    --faint: #5f6b7e;
+    --muted: #aab5c4;
+    --faint: #8f9cb0;
     --hair: #2a3441;
+    --edge: #5f6d7f;
 
     --signal: #7d92ff;
     --signal-soft: #1d2544;
@@ -47,6 +66,9 @@
     --tg-soft: #33290f;
     --eos: #e8848a;
     --eos-soft: #331a1c;
+
+    --on-accent: #10141b;
+    --shadow: 0, 0, 0;
   }
 }
 
@@ -171,7 +193,7 @@ h2 { font-size: 0.9rem; margin: 1.6rem 0 0.6rem; }
   padding: 0.32rem 0.6rem;
   min-width: 14rem;
   border-radius: var(--radius);
-  border: 1px solid var(--hair);
+  border: 1px solid var(--edge);
   background: var(--panel);
   color: var(--ink);
 }
@@ -194,7 +216,7 @@ h2 { font-size: 0.9rem; margin: 1.6rem 0 0.6rem; }
 }
 
 .stale-flag { color: var(--eos); background: var(--eos-soft); }
-.refresh-flag { color: var(--faint); border-color: var(--hair); }
+.refresh-flag { color: var(--faint); border-color: var(--edge); }
 
 .refresh-log {
   margin: 0.7rem 0 0;
@@ -261,7 +283,7 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 
 .segmented .segment.is-active {
   background: var(--signal);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .segmented .segment:focus-visible {
@@ -360,9 +382,13 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
   margin-top: 0.1rem;
 }
 
-/* Off the path: present but receded, so the shape of the answer is unmistakable. */
-.node.dim { opacity: 0.24; }
-.node.dim:hover { opacity: 0.6; }
+/* Off the path: present but receded, so the shape of the answer is unmistakable. Receded,
+   though, not concealed — a node off the load path is still a node whose version someone
+   has to be able to read, and the floor here is the opacity at which --ink still clears
+   4.5:1 against --surface. The path itself is carried by .node.lit's fill and border
+   below, which is the louder cue anyway, so nothing is lost by not dimming harder. */
+.node.dim { opacity: 0.55; }
+.node.dim:hover { opacity: 0.75; }
 
 .node.lit {
   border-color: var(--signal);
@@ -374,10 +400,10 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
   border-color: var(--signal);
   border-width: 2px;
   background: var(--signal);
-  color: #fff;
+  color: var(--on-accent);
 }
 
-.node.pinned .detail { color: rgba(255, 255, 255, 0.78); }
+.node.pinned .detail { color: color-mix(in srgb, var(--on-accent) 78%, transparent); }
 
 .node.picked { border-color: var(--pick); background: var(--pick-soft); }
 
@@ -480,7 +506,7 @@ button.ghost.inline { margin-left: 0.6rem; }
   border-radius: var(--radius);
   border: 1px solid var(--hair);
   background: var(--panel);
-  box-shadow: 0 10px 26px rgba(10, 16, 28, 0.16);
+  box-shadow: 0 10px 26px rgba(var(--shadow), 0.16);
   font-family: var(--mono);
   font-size: 0.75rem;
   line-height: 1.45;
@@ -503,7 +529,7 @@ button.ghost.inline { margin-left: 0.6rem; }
   max-height: 70vh;
   overflow-y: auto;
   border-color: var(--signal);
-  box-shadow: 0 12px 30px rgba(10, 16, 28, 0.24);
+  box-shadow: 0 12px 30px rgba(var(--shadow), 0.24);
 }
 
 .peek-hint {
@@ -851,7 +877,7 @@ button.ghost.inline { margin-left: 0.6rem; }
 .map-node:focus-visible .map-node-box { stroke-width: 3; }
 
 .map-node.is-pinned .map-node-box { fill: var(--signal); stroke: var(--signal); }
-.map-node.is-pinned .map-node-text { fill: #fff; }
+.map-node.is-pinned .map-node-text { fill: var(--on-accent); }
 
 .map-node.is-picked .map-node-box { stroke: var(--pick); stroke-width: 2.2; fill: var(--pick-soft); }
 
@@ -891,7 +917,7 @@ button.ghost.inline { margin-left: 0.6rem; }
   letter-spacing: 0.04em;
 }
 
-.map-node.is-pinned .map-node-train { fill: rgba(255, 255, 255, 0.82); }
+.map-node.is-pinned .map-node-train { fill: color-mix(in srgb, var(--on-accent) 82%, transparent); }
 
 /* ---- the explainer ----------------------------------------------------- */
 
@@ -965,7 +991,7 @@ button.ghost.inline { margin-left: 0.6rem; }
   letter-spacing: 0.05em;
   vertical-align: 0.1em;
   text-decoration: none;
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .phase-tag.phase-technical-guidance { background: var(--tg); }

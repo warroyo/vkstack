@@ -306,14 +306,16 @@ func generateGeneration(handler http.Handler, bundles map[bundleKey]*siteData, g
 	}
 
 	// The unpinned map already lists every node the page can offer, and each node carries
-	// the release a click on it pins. Enumerating from the response rather than from the
-	// graph means this asks for exactly what the UI would ask for, no more and no less.
+	// every release it groups plus the one a plain click pins. Enumerating from the
+	// response rather than from the graph means this asks for exactly what the UI would
+	// ask for, no more and no less.
 	var layout struct {
 		Layers []struct {
 			Key   string `json:"key"`
 			Nodes []struct {
-				Label string `json:"label"`
-				Pin   string `json:"pin"`
+				Label    string   `json:"label"`
+				Pin      string   `json:"pin"`
+				Releases []string `json:"releases"`
 			} `json:"nodes"`
 		} `json:"layers"`
 	}
@@ -329,13 +331,22 @@ func generateGeneration(handler http.Handler, bundles map[bundleKey]*siteData, g
 			if version == "" {
 				version = node.Label
 			}
-			if _, seen := base.StackMaps[layer.Key][version]; seen {
-				continue
+			// A grouped node's <select> lets a reader pin any release it stands for, not
+			// only the default — see nodeSelect in app.js. Every one of those has to be
+			// answerable here too, or picking anything but the default 404s on a static
+			// build while working fine against `vkstack serve`.
+			versions := node.Releases
+			if len(versions) == 0 {
+				versions = []string{version}
 			}
-
-			if err := answer(layer.Key, version,
-				url.Values{"product": {layer.Key}, "version": {version}}); err != nil {
-				return err
+			for _, v := range versions {
+				if _, seen := base.StackMaps[layer.Key][v]; seen {
+					continue
+				}
+				if err := answer(layer.Key, v,
+					url.Values{"product": {layer.Key}, "version": {v}}); err != nil {
+					return err
+				}
 			}
 		}
 	}

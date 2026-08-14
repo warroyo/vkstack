@@ -45,6 +45,18 @@
   --radius: 7px;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --step: 180ms;
+
+  /* The page column. --page-max is the outer box <main> is capped at, padding included;
+     --page-content is what is left inside that padding, and is what the masthead holds
+     its own contents to so the two columns share one left edge. Derived from one number
+     so the pair cannot drift apart.
+
+     This is not a prose measure — the wide things on this page are a drawing and a set of
+     wrapped version rows, both of which read better with more room, and the one genuinely
+     text-shaped element (.lede) sets its own 60ch. At 1240 the map was boxed into roughly
+     half a modern window with its own detail rail pushed against it. */
+  --page-max: 1800px;
+  --page-content: calc(var(--page-max) - 3rem);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -87,10 +99,20 @@ body {
 
 /* ---- masthead ---------------------------------------------------------- */
 
+/* The bar itself spans the window — it is the page's top edge, and a panel that stopped
+   short of the sides would read as a floating card. Its contents are held to the same
+   column as <main> below so the two line up, rather than the text starting at the window
+   edge while the content under it starts wherever the column does. */
 .masthead {
   background: var(--panel);
   border-bottom: 1px solid var(--hair);
   padding: 0.9rem 1.5rem 0.7rem;
+}
+
+.masthead > * {
+  max-width: var(--page-content);
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .masthead-row {
@@ -158,7 +180,14 @@ body {
 .gh-link:hover { color: var(--ink); }
 .gh-link:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
 
-main { padding: 1.5rem; max-width: 1240px; }
+/* Centred, not left-pinned. The cap has been here since the map landed but nothing ever
+   centred it, so every window wider than the column left a growing empty margin down the
+   right-hand side while the page crushed itself against the left edge. */
+main {
+  padding: 1.5rem;
+  max-width: var(--page-max);
+  margin: 0 auto;
+}
 
 .view.hidden { display: none; }
 
@@ -412,6 +441,43 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
   color: var(--faint);
 }
 
+/* ---- grouped node: a real dropdown -------------------------------------- */
+/*
+ * A grouped node's badges (train, lifecycle, provenance) can't live inside <option> text,
+ * so a <select> alone can't hold them the way a plain <button> holds its badges as
+ * children. The wrapper is what puts them back in the same box instead of loose in the
+ * row: it carries the node's own classes — .node plus whatever state applies — so it
+ * picks up the exact same pill chrome and pinned/lit/dim colouring .node already has,
+ * and the select inside it goes bare, right down to that state's colour, so the two read
+ * as one thing. A badge floating in the gap between unrelated nodes, with nothing to say
+ * which one it belonged to, was the "odd place" a reader ran into.
+ */
+.node-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: default;
+}
+
+/* Deliberately not appearance: none on the select — the browser's own dropdown chevron
+   is what makes "this opens a list" legible at a glance. The rest of its chrome is given
+   up on purpose: the wrapper already carries the border, background and padding a plain
+   .node has, and a second box inside the first would just be the old double-badge
+   problem wearing a border this time. */
+.node-select {
+  font: inherit; /* no longer shares .node's class to inherit this the ordinary way */
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0 1.1rem 0 0;
+  margin: 0;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-select:focus-visible { outline-offset: 1px; }
+
 /* ---- recommended stack ------------------------------------------------- */
 
 .recommended {
@@ -553,6 +619,33 @@ button.ghost.inline { margin-left: 0.6rem; }
 
 .peek.hidden { display: none; }
 
+/* Each build in a grouped node's release list is its own pin target — click one to pin
+   that exact build instead of the node's reachScore-picked default. Block-level and
+   full-width so the whole row is the click target, not just the text. */
+.peek-release {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 0.05rem 0.3rem;
+  margin: 0 -0.3rem;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.peek-release:hover,
+.peek-release:focus-visible {
+  background: var(--signal-soft);
+  outline: none;
+}
+.peek-release.is-active {
+  color: var(--signal);
+  font-weight: 700;
+}
+
 /* ---- the detail rail ---------------------------------------------------- */
 
 /* Below the breakpoint there is no column to spare, so the rail collapses and the
@@ -573,7 +666,12 @@ button.ghost.inline { margin-left: 0.6rem; }
     display: block;
     position: sticky;
     top: 1rem;
-    max-height: calc(100vh - 2rem);
+    /* Capped to the map's own rendered height (--map-h, set by syncRailHeight in app.js),
+       not the viewport. A sticky child's box still counts toward its grid row's height —
+       uncapped, a long release list made the rail taller than the map beside it, and the
+       row grew with it, dragging the strata list far down the page under a pointer that
+       never moved. The viewport term is only the fallback before JS runs. */
+    max-height: clamp(16rem, var(--map-h, 100vh), calc(100vh - 2rem));
     overflow-y: auto;
     padding: 0.6rem 0.75rem;
     border: 1px solid var(--hair);
@@ -1012,26 +1110,101 @@ button.ghost.inline { margin-left: 0.6rem; }
 .map-node.is-end-of-support .map-node-box { stroke: var(--eos); fill: var(--eos-soft); }
 
 /* Provenance, on the node itself. "not tested" is upstream's own hedge on a yes;
-   "inferred" means no upstream result exists for a pair the stack depends on. */
+   "inferred" means no upstream result exists for a pair the stack depends on.
+   These are critical caveats, but written out on the node they were the wrong size for
+   the job: on a generation where an inferred Supervisor-to-VKr edge touches nearly every
+   VKr and VKS release, a worded pill lands on almost every box and stops reading as a
+   flag at all — it becomes texture as loud as the version numbers themselves. On the
+   node the marker's whole job is "this one has a caveat, and which kind"; the wording
+   lives in the caveats panel below the layers, where it can be read as prose and where
+   two dozen of them are a list rather than noise smeared across five rows. */
 .prov-tag {
   display: inline-block;
-  margin-left: 0.35rem;
-  padding: 0 0.26rem;
-  border-radius: 3px;
-  border: 1px dashed currentColor;
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  vertical-align: 0.1em;
-  text-decoration: none;
+  width: 0.42rem;
+  height: 0.42rem;
+  margin-left: 0.34rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 0.09em;
+  /* The wording still ships in the markup for screen readers; it is only the sighted
+     rendering that collapses to a dot, so the caveat is never *only* a colour. */
+  overflow: hidden;
+  text-indent: 101%;
+  white-space: nowrap;
 }
 
 .prov-tag.is-untested { color: var(--tg); }
 .prov-tag.is-unverified { color: var(--muted); }
-.prov-tag.is-footnote { color: var(--warn); border-style: solid; }
+.prov-tag.is-footnote { color: var(--warn); }
+
+/* Hollow, so "inferred" — no upstream result at all — is distinguishable from the two
+   filled markers without relying on its grey being told apart from an amber and a rust. */
+.prov-tag.is-unverified {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+/* On a pinned node every marker sits on the solid accent fill, where --tg and --warn are
+   an unchosen colour-on-colour pair. Same fix as .detail and the phase tags: hand them
+   the foreground the fill was designed to carry. Shape still separates them. */
+.node.pinned .prov-tag { color: var(--on-accent); }
 
 .map-node.is-untested .map-node-box { stroke-dasharray: 6 3; }
 .map-node.is-unverified .map-node-box { stroke-dasharray: 1.5 3.5; }
+
+/* ---- the caveats panel -------------------------------------------------- */
+
+/* Where the markers above are written out. Same swatch shapes as the nodes carry, so the
+   dot on a version and the row explaining it are visibly the same thing. */
+.caveats {
+  margin-top: 1.1rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--tg);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.caveats.hidden { display: none; }
+.caveats .section-label { margin: 0 0 0.7rem; }
+
+.caveat {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--hair);
+}
+.caveats .caveat:first-of-type { border-top: 0; padding-top: 0; }
+
+/* The swatch keeps .prov-tag's dot rendering; it is the same marker, at the head of the
+   row that explains it. margin-left there is for sitting after a version label, which is
+   not what it is doing here. */
+.caveat .prov-tag { margin-left: 0; margin-top: 0.34rem; flex: none; }
+
+.caveat-head {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 0.1rem;
+}
+
+.caveat-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  max-width: 78ch;
+}
+
+/* The versions carrying it. Monospace and quiet: this is a list to scan for a name you
+   already have in mind, not prose to read through. */
+.caveat-versions {
+  margin-top: 0.25rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--faint);
+  line-height: 1.6;
+}
 
 .hidden-count {
   align-self: center;
@@ -1054,13 +1227,57 @@ button.ghost.inline { margin-left: 0.6rem; }
   flex-wrap: wrap;
   gap: 0.4rem 1.2rem;
   list-style: none;
-  margin: 0 0 1rem;
+  margin: 0;
   padding: 0;
   font-size: 0.76rem;
   color: var(--muted);
 }
 
 .legend li { display: flex; align-items: center; gap: 0.4rem; }
+
+/* One block per channel — box, line, dot. Grouped because the three say different kinds
+   of thing about the same node, and a flat list of nine entries invites reading a line
+   style as a fill.
+
+   The three sit side by side wherever they fit and fall back to stacking when they do
+   not. Stacked unconditionally they were three short rows hugging the left edge of a
+   page much wider than any of them — the key taking three bands of vertical space to say
+   what fits comfortably on one. */
+.legend-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 2.5rem;
+  margin-bottom: 1rem;
+}
+
+.legend-group { margin: 0; }
+
+.legend-title {
+  margin: 0 0 0.3rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* A length of the connection itself, drawn with the same strokes the map uses: solid,
+   long-dashed for untested, finely dotted for inferred. Sized to read as a line rather
+   than as a very flat box. */
+.rule {
+  width: 1.6rem;
+  height: 0;
+  flex: none;
+  border-top: 2px solid var(--signal);
+  opacity: 0.75;
+}
+
+.rule-untested { border-top-style: dashed; border-top-color: var(--tg); }
+.rule-unverified { border-top-style: dotted; border-top-color: var(--muted); }
+
+/* The dot markers carry their wording in the list item beside them here, so the
+   text-indent that hides their own label on a node would only leave a gap. */
+.legend .prov-tag { margin-left: 0; text-indent: 0; }
 
 .swatch {
   width: 0.85rem;
@@ -1075,10 +1292,10 @@ button.ghost.inline { margin-left: 0.6rem; }
 .sw-eos { background: var(--eos-soft); border-color: var(--eos); }
 
 /* Lifecycle is a fill; provenance is a stroke. Keeping the two channels apart is what
-   lets a node say "supported" and "not tested" at the same time without ambiguity. */
+   lets a node say "supported" and "not tested" at the same time without ambiguity —
+   provenance is now shown as the line and dot it actually is on the map (.rule and
+   .prov-tag above), so only the lifecycle swatches are boxes. */
 .sw-mixed { background: transparent; border-color: var(--eos); border-style: dashed; }
-.sw-untested { background: transparent; border-color: var(--tg); border-style: dashed; }
-.sw-unverified { background: transparent; border-color: var(--muted); border-style: dotted; }
 
 /* The reason a selection reaches no stack. The map showing nothing is not an answer;
    this is. */

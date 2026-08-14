@@ -102,14 +102,42 @@
         <aside id="peek-rail" class="peek-rail" aria-live="polite"></aside>
       </div>
 
-      <ul class="legend" id="legend">
-        <li><span class="swatch sw-general"></span>General Support</li>
-        <li><span class="swatch sw-tg"></span>Technical Guidance — no new fixes</li>
-        <li><span class="swatch sw-eos"></span>End of Support</li>
-        <li><span class="swatch sw-mixed"></span>grouped line with older builds out of support</li>
-        <li><span class="swatch sw-untested"></span>listed compatible, not tested upstream</li>
-        <li><span class="swatch sw-unverified"></span>never evaluated upstream — inferred</li>
-      </ul>
+      <!--
+        Three channels, kept apart because a node routinely speaks in all three at once:
+        the box says where a release is in its life, the line says how well upstream
+        vouches for a pairing, and the dot says the same about a release. A reader who
+        had to ask what a dashed connection meant was reading a legend made entirely of
+        boxes — the lines and the dots on the map had no entry at all.
+      -->
+      <div class="legend-groups">
+        <div class="legend-group">
+          <p class="legend-title">Versions</p>
+          <ul class="legend">
+            <li><span class="swatch sw-general"></span>General Support</li>
+            <li><span class="swatch sw-tg"></span>Technical Guidance — no new fixes</li>
+            <li><span class="swatch sw-eos"></span>End of Support</li>
+            <li><span class="swatch sw-mixed"></span>grouped line with older builds out of support</li>
+          </ul>
+        </div>
+
+        <div class="legend-group">
+          <p class="legend-title">Connections</p>
+          <ul class="legend">
+            <li><span class="rule rule-verified"></span>verified compatible upstream</li>
+            <li><span class="rule rule-untested"></span>listed compatible, not tested upstream</li>
+            <li><span class="rule rule-unverified"></span>never evaluated upstream — inferred</li>
+          </ul>
+        </div>
+
+        <div class="legend-group">
+          <p class="legend-title">Marks on a version</p>
+          <ul class="legend">
+            <li><span class="prov-tag is-untested"></span>listed compatible, not tested upstream</li>
+            <li><span class="prov-tag is-unverified"></span>never evaluated upstream — inferred</li>
+            <li><span class="prov-tag is-footnote"></span>upstream note — see the caveats below</li>
+          </ul>
+        </div>
+      </div>
 
       <div class="section-head">
         <div>
@@ -125,6 +153,12 @@
 
       <!-- Rows render bottom-up: the base you build on first is at the bottom. -->
       <div id="strata" class="strata" aria-label="Compatibility layers, bottom to top"></div>
+
+      <!-- Where the caveats marked on the nodes above are written out. On the node itself
+           there is only room for a marker saying "there is one, of this kind"; the wording
+           that makes a caveat actionable needs prose, and two dozen of them need a list
+           rather than a badge on every box in five rows. -->
+      <section id="caveats" class="caveats hidden" aria-label="Caveats on the versions above"></section>
 
       <div id="recommended" class="recommended hidden"></div>
 

@@ -226,6 +226,7 @@ async function loadStack() {
   state.deadEnd = data.deadEnd || null;
 
   renderMap();
+  syncRailHeight();
   renderStrata();
   renderPinControls();
   renderRecommended();
@@ -293,12 +294,24 @@ const ZOOM_STEP = 1.2;
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
-// fitScale is the scale at which the whole drawing fits the frame's width. Capped at 1:
-// a map narrower than its frame is drawn at its natural size and centred, never blown up.
+// fitScale is the scale at which the whole drawing fits the frame's width.
+//
+// It used to be capped at 1, so a drawing narrower than its frame was drawn at its
+// natural size and centred. That reads as deliberate when the frame is close to the
+// drawing's own width, and as a mistake once it is not: a selection that narrows the map
+// to a handful of nodes left a small picture marooned in the middle of a very wide box,
+// with the frame growing but the contents never taking it up.
+//
+// So it fills the frame now, up to a limit. The limit matters — a two-node map scaled to
+// a 1700px frame would be billboard-sized — and it is the drawing's own proportions that
+// decide, never a magic number: the height is allowed to reach the frame's width-driven
+// fit or FIT_MAX, whichever is smaller.
+const FIT_MAX = 1.75;
+
 function fitScale() {
   const frameW = $("#map").clientWidth;
   if (!frameW || !world.w) return 1;
-  return Math.min(1, frameW / world.w);
+  return clamp(frameW / world.w, 0, FIT_MAX);
 }
 
 // Zooming out past the fit would only add empty space around a map already fully visible.
@@ -306,15 +319,20 @@ const minScale = () => Math.min(1, fitScale());
 
 // applyView writes the current viewport onto the SVG.
 //
-// The element's own height shrinks with the scale so a fitted map does not sit in a box
-// sized for a drawing three times larger, but never grows past the natural height: zooming
-// in reveals less of the map rather than making the page taller.
+// The element's own height tracks the scale so a fitted map does not sit in a box sized
+// for a drawing three times larger — but only as far as the fit. Past that, zooming in
+// reveals less of the map rather than making the page taller.
+//
+// The ceiling is the fit rather than a flat 1 because the fit can now exceed 1: a drawing
+// narrower than its frame is scaled up to fill it, and capping the height at its natural
+// size while the width grew would crop it vertically — the whole map would no longer be
+// in view at the very scale chosen to show all of it.
 function applyView() {
   if (!mapDOM.svg || !world.w) return;
   const frameW = $("#map").clientWidth || world.w;
 
   view.k = clamp(view.k, minScale(), ZOOM_MAX);
-  const viewportH = world.h * Math.min(1, view.k);
+  const viewportH = world.h * Math.min(fitScale(), view.k);
   const boxW = frameW / view.k;
   const boxH = viewportH / view.k;
 
@@ -973,6 +991,76 @@ function renderStrata() {
           el("div", { class: "layer-name" }, layer.label), count),
         nodes));
   }
+  renderCaveats();
+}
+
+// renderCaveats writes out, in prose, every caveat the markers above only point at.
+//
+// The markers answer "does this one have a caveat, and which kind"; that is all a dot on
+// a node can carry, and all it should — the wording that makes a caveat actionable does
+// not fit on a box, and on a layer where most releases carry the same inferred edge it
+// turned into wallpaper when it was tried. Here the same set reads as a list: grouped by
+// kind, naming the versions, in one place a reader can take in at a glance.
+function renderCaveats() {
+  const box = $("#caveats");
+  if (!box) return;
+  box.textContent = "";
+
+  // Kept to what the reader can actually see above. A caveat on a node hidden by the
+  // legacy filter or the search box would name a version that is not on the page.
+  const kinds = [
+    { key: "unverified", cls: "is-unverified", label: "Never evaluated upstream",
+      note: "No upstream result exists for these; the connection is inferred from the rest of the stack." },
+    { key: "untested", cls: "is-untested", label: "Listed compatible, not tested",
+      note: "Upstream's own hedge: published as a yes, but not exercised." },
+  ];
+  const found = new Map(kinds.map((k) => [k.key, []]));
+  const footnotes = new Map(); // note text -> versions carrying it
+
+  for (const layer of state.layers) {
+    if (!isOpen(layer)) continue;
+    for (const node of layer.nodes) {
+      if (state.hideLegacy && node.legacy) continue;
+      if (state.filter && !nodeMatches(node, state.filter)) continue;
+      // The provenance flags only mean anything about the current selection, which is
+      // exactly when the node is lit — the same condition the markers render under.
+      const lit = state.lit ? state.lit.has(node.id) : false;
+      const name = `${layer.label} ${node.label}${node.train ? ` ${node.train}` : ""}`;
+      if (lit && node.unverified) found.get("unverified").push(name);
+      else if (lit && node.untested) found.get("untested").push(name);
+      for (const note of node.footnotes || []) {
+        if (!footnotes.has(note)) footnotes.set(note, []);
+        footnotes.get(note).push(name);
+      }
+    }
+  }
+
+  const rows = [];
+  for (const kind of kinds) {
+    const names = found.get(kind.key);
+    if (!names.length) continue;
+    rows.push(el("div", { class: "caveat" },
+      el("span", { class: `prov-tag ${kind.cls}` }, kind.label),
+      el("div", {},
+        el("div", { class: "caveat-head" }, kind.label),
+        el("div", { class: "caveat-note" }, kind.note),
+        el("div", { class: "caveat-versions" }, names.join(" · ")))));
+  }
+  // Upstream's own footnotes, which are per-pair prose and cannot be summarised — the
+  // versions carrying each are listed under it rather than the other way round, because
+  // one note routinely applies to a dozen releases at once.
+  for (const [note, names] of footnotes) {
+    rows.push(el("div", { class: "caveat" },
+      el("span", { class: "prov-tag is-footnote" }, "Upstream note"),
+      el("div", {},
+        el("div", { class: "caveat-head" }, "Upstream note"),
+        el("div", { class: "caveat-note" }, note),
+        el("div", { class: "caveat-versions" }, names.join(" · ")))));
+  }
+
+  if (!rows.length) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.append(el("h2", { class: "section-label" }, "Caveats on the versions above"), ...rows);
 }
 
 // toggleLayer opens or closes one optional layer.
@@ -1017,7 +1105,11 @@ function strataKeys(ev, layer, node) {
   const rows = [...document.querySelectorAll("#strata .layer-nodes")];
   const row = ev.currentTarget.closest(".layer-nodes");
   const rowIndex = rows.indexOf(row);
-  const buttons = [...row.querySelectorAll("button.node")];
+  // A grouped node renders as a <select>, not a <button> — same class, so this still
+  // finds it. It just doesn't call back into here itself: arrow keys on a focused select
+  // are the browser's to change its value with, so navigation off of one is a Tab away
+  // rather than another arrow press.
+  const buttons = [...row.querySelectorAll(".node")];
   const at = buttons.indexOf(ev.currentTarget);
 
   if (ev.key === "Home") { buttons[0]?.focus(); return; }
@@ -1030,7 +1122,7 @@ function strataKeys(ev, layer, node) {
   // down lands where you started rather than at the edge.
   const target = rows[rowIndex + cross];
   if (!target) return;
-  const peers = [...target.querySelectorAll("button.node")];
+  const peers = [...target.querySelectorAll(".node")];
   peers[Math.min(peers.length - 1, at)]?.focus();
 }
 
@@ -1046,6 +1138,7 @@ function nodeMatches(node, needle) {
 function nodeButton(layer, node) {
   const pinned = isPinned(layer, node);
   const lit = state.lit ? state.lit.has(node.id) : false;
+  const builds = peekParts(layer, node)?.body?.filter((b) => b.raw) || [];
 
   const classes = ["node"];
   if (node.noData) classes.push("nodata");
@@ -1055,10 +1148,61 @@ function nodeButton(layer, node) {
   else if (state.lit) classes.push("dim");
   if (!pinned && isRecommended(layer.key, node)) classes.push("picked");
 
+  // Everything a node needs to say beyond its label — train, lifecycle, provenance —
+  // lives in these badges regardless of whether the label itself ends up in a button or
+  // a select: a select's own options are plain text, with no room for a styled tag.
+  //
+  // Train is the one exception. A select's default option already reads "1.31 vsc9" —
+  // the train is baked into the same text a plain button would put a badge next to — so
+  // a badge repeating it is a second "vsc9" sitting right beside the first.
+  const badges = [
+    node.train && builds.length < 2 ? el("span", { class: "train" }, node.train) : null,
+    node.legacy ? el("span", { class: `phase-tag phase-${node.phase}` },
+      node.phase === "end-of-support" ? "EOS" : "TG") : null,
+    // A line keeps its best phase as its headline, but a node holding worse builds has
+    // to admit it, or picking one out of it is a coin toss. This applies to an amber
+    // node as much as a green one: VKr 1.26 reads Technical Guidance off a single build
+    // upstream mislabelled, while the other five went End of Support in January 2025.
+    node.mixed && node.worstPhase !== node.phase
+      ? el("span", { class: `phase-tag phase-${node.worstPhase} is-mixed` },
+          node.worstPhase === "end-of-support" ? "some EOS" : "some TG")
+      : null,
+    // Markers, not labels (see .prov-tag): the wording is written out in the caveats
+    // panel below the layers, and stays in the markup here for screen readers and the
+    // hover title. On the node all that is left is "there is a caveat, of this kind".
+    lit && node.unverified
+      ? el("span", { class: "prov-tag is-unverified", title: "Never evaluated upstream — this link is inferred, not looked up" }, "inferred")
+      : null,
+    lit && !node.unverified && node.untested
+      ? el("span", { class: "prov-tag is-untested", title: "Listed compatible, not tested — upstream's own hedge on this pairing" }, "not tested")
+      : null,
+    node.footnotes?.length
+      ? el("span", { class: "prov-tag is-footnote", title: node.footnotes.join(" ") }, "note")
+      : null,
+    // The vCenter host summary has no other home and always shows. Everywhere else,
+    // "N versions · newest X" is what a select's own option list already says the moment
+    // it opens — repeating it beside a dropdown that already signals "there's more here"
+    // is exactly the noise a reader called out: a build count next to a build count. And
+    // once a node is the pin itself, the exact patch is already named in the pin label
+    // above the map — a second line here saying it again is that same problem again, on
+    // the one node in the row a reader is least likely to need reminding about.
+    node.detail && (layer.key === "vcenter" || (builds.length < 2 && !pinned))
+      ? el("span", { class: "detail" },
+          layer.key === "vcenter" ? `on ESX ${node.detail}` : node.detail)
+      : null,
+  ];
+
+  // A grouped node reaching into more than one exact build becomes a real <select>: the
+  // dropdown affordance says "there is more here" for free, in a shape every reader
+  // already knows how to operate, rather than a second control next to the node whose
+  // job was not obvious at a glance. The node's own default pin — the reachScore build,
+  // same one a plain click always meant — is simply the option already showing.
+  if (builds.length > 1) return nodeSelect(layer, node, builds, classes, badges);
+
   const label = [node.label];
   if (node.noData) label.push(" · no data yet");
 
-  const button = el("button", {
+  return el("button", {
       class: classes.join(" "),
       type: "button",
       "data-node": node.id,
@@ -1076,28 +1220,54 @@ function nodeButton(layer, node) {
       onblur: () => hidePeek(),
       onkeydown: (ev) => strataKeys(ev, layer, node),
     },
-    label.join(""),
-    node.train ? el("span", { class: "train" }, node.train) : null,
-    node.legacy ? el("span", { class: `phase-tag phase-${node.phase}` },
-      node.phase === "end-of-support" ? "EOS" : "TG") : null,
-    // A line keeps its best phase as its headline, but a node holding worse builds has
-    // to admit it, or picking one out of it is a coin toss. This applies to an amber
-    // node as much as a green one: VKr 1.26 reads Technical Guidance off a single build
-    // upstream mislabelled, while the other five went End of Support in January 2025.
-    node.mixed && node.worstPhase !== node.phase
-      ? el("span", { class: `phase-tag phase-${node.worstPhase} is-mixed` },
-          node.worstPhase === "end-of-support" ? "some EOS" : "some TG")
-      : null,
-    lit && node.unverified ? el("span", { class: "prov-tag is-unverified" }, "inferred") : null,
-    lit && !node.unverified && node.untested
-      ? el("span", { class: "prov-tag is-untested" }, "not tested") : null,
-    node.footnotes?.length ? el("span", { class: "prov-tag is-footnote" }, "note") : null,
-    node.detail
-      ? el("span", { class: "detail" },
-          layer.key === "vcenter" ? `on ESX ${node.detail}` : node.detail)
-      : null);
+    label.join(""), ...badges);
+}
 
-  return button;
+// nodeSelect renders a grouped node as a native dropdown: the closed box still reads as
+// the node — same classes, same badges beside it — but opening it lists every exact build
+// upstream publishes for this line, and picking one pins that build exactly. The node's
+// usual default (the reachScore-picked build a plain click always meant) is just the
+// option already selected, so nothing about the old one-click behaviour changes for
+// anyone who never opens it.
+function nodeSelect(layer, node, builds, classes, badges) {
+  // builds already includes the default build (node.pin) among the full release list — an
+  // unfiltered option list would show it twice, once under its short label and again
+  // under its raw version a few rows down.
+  const others = builds.filter((b) => b.raw !== node.pin);
+  const options = [
+    // Short, like the closed box always read — the why (reaches the most below it) is
+    // one hover or Tab away in the rail, via node.pinNote, not repeated here.
+    el("option", { value: node.pin }, `${node.label}${node.train ? ` ${node.train}` : ""}`),
+    ...others.map((b) => el("option", { value: b.raw }, b.text)),
+  ];
+  const select = el("select", {
+      // Bare, not .node — the wrapper below carries the pill chrome and the state
+      // colour (pinned/lit/dim/phase) for both itself and its badges, so the select
+      // just sits inside it rather than drawing a second, redundant box.
+      class: "node-select",
+      "data-node": node.id,
+      "aria-label": `${node.label} — ${builds.length} builds`,
+      title: `${builds.length} builds — pick one exactly`,
+      onchange: (ev) => setPin({ product: layer.key, version: ev.target.value }),
+      onmouseenter: (ev) => showPeek(ev.currentTarget, layer, node),
+      onfocus: (ev) => showPeek(ev.currentTarget, layer, node),
+      onmouseleave: () => hidePeek(),
+      onblur: () => hidePeek(),
+    },
+    ...options);
+
+  // Which build is showing when the box is closed. Pinned to one of this node's own
+  // builds, that one; otherwise the default — setAttribute("value", …) on a <select>
+  // itself is a no-op, so this has to be the DOM property, set after the options exist.
+  select.value = (state.pin && state.pin.product === layer.key &&
+      builds.some((b) => b.raw === state.pin.version))
+    ? state.pin.version
+    : node.pin;
+
+  // The wrapper is the pill now — same classes a plain node's <button> gets, so it picks
+  // up .node's border, padding, background and every state colour for free, and the
+  // select and its badges sit inside that one box instead of scattered across the row.
+  return el("span", { class: [...classes, "node-group"].join(" ") }, select, ...badges);
 }
 
 // A node stands for one or more releases, and pinning selects one of them: the newest,
@@ -1712,20 +1882,45 @@ function peekParts(layer, node) {
   for (const line of node.provenance || []) head.push(line);
   for (const note of node.footnotes || []) head.push(`Upstream note — ${note}`);
 
-  // Notes are the releases written for a reader; releases are the raw strings. Either
-  // way, say which one a click selects rather than leaving "the newest" to be assumed.
+  // Notes are the releases written for a reader; releases are the raw strings a pin
+  // takes. They come from the same loop server-side, in the same order, so index i of
+  // one names index i of the other — that pairing is what lets each line below become
+  // its own pin rather than only the node's picked default.
   const body = [];
   const notes = node.notes?.length ? node.notes : (node.releases || []);
+  // Only trust node.releases as the pin value when it lines up index-for-index with
+  // notes. A mismatch should never happen — both come from the same server-side loop —
+  // but a raw string that quietly picked up a note's " · Technical Guidance (...)" tail
+  // would make an unpinnable, broken pin rather than no pin at all, so fall back to
+  // nothing pinnable instead of guessing.
+  const raws = node.releases?.length === notes.length ? node.releases : [];
   if (node.noData) {
     head.push("Upstream publishes no compatibility data for this release yet.");
   } else if (notes.length > 1) {
-    head.push(`Clicking selects ${node.pin} — the newest of ${notes.length} here.`);
-    body.push(...notes);
+    head.push(`Clicking the node pins ${node.pin}, picked for reaching the most below it. ` +
+      `Click a build here to pin that one exactly.`);
+    body.push(...notes.map((text, i) => ({ text, raw: raws[i] })));
   } else if (notes.length === 1 && notes[0] !== node.label) {
-    body.push(notes[0]);
+    body.push({ text: notes[0], raw: raws[0] });
   }
   if (!head.length && !body.length) return null;
   return { title: `${layer.label} ${node.label}`, head, body };
+}
+
+// peekReleaseRow renders one exact build as its own pin target — what lets a reader
+// reach into a grouped node (several patch builds bundled under one label) and select
+// the specific one they need, rather than only the node's reachScore-picked default.
+function peekReleaseRow(layer, item) {
+  if (!item.raw) return el("div", {}, item.text); // no trustworthy pin value — see peekParts
+  const active = state.pin && state.pin.product === layer.key && state.pin.version === item.raw;
+  // Unlocked, the popover has pointer-events:none (see .peek in the stylesheet) so this
+  // click never fires there — only in the rail, or a locked popover, both already
+  // interactive. Nothing extra to gate here.
+  return el("button", {
+    class: "peek-release" + (active ? " is-active" : ""),
+    type: "button",
+    onclick: (ev) => { ev.stopPropagation(); setPin({ product: layer.key, version: item.raw }); },
+  }, item.text);
 }
 
 function showPeek(anchor, layer, node) {
@@ -1750,13 +1945,13 @@ function showPeek(anchor, layer, node) {
     el("span", { class: "peek-hint" },
       locked ? "Esc or shift-click to release" : "shift-click to keep open")));
   for (const line of head) peek.append(el("div", { class: "peek-head" }, line));
-  for (const line of body.slice(0, room)) peek.append(el("div", {}, line));
+  for (const item of body.slice(0, room)) peek.append(peekReleaseRow(layer, item));
   if (body.length > room) peek.append(el("div", {}, `+${body.length - room} more`));
   if (locked) {
     peek.append(el("div", { class: "peek-actions" },
       el("button", {
         class: "ghost", type: "button",
-        onclick: (ev) => copyText([...body].join("\n"), ev.currentTarget, "Copied"),
+        onclick: (ev) => copyText(body.map((b) => b.text).join("\n"), ev.currentTarget, "Copied"),
       }, "Copy releases")));
   }
 
@@ -1782,12 +1977,12 @@ function showPeekInRail(layer, node) {
   rail.textContent = "";
   rail.append(el("div", { class: "peek-title" }, parts.title));
   for (const line of parts.head) rail.append(el("div", { class: "peek-head" }, line));
-  for (const line of parts.body) rail.append(el("div", {}, line));
+  for (const item of parts.body) rail.append(peekReleaseRow(layer, item));
   if (parts.body.length) {
     rail.append(el("div", { class: "peek-actions" },
       el("button", {
         class: "ghost", type: "button",
-        onclick: (ev) => copyText([...parts.body].join("\n"), ev.currentTarget, "Copied"),
+        onclick: (ev) => copyText(parts.body.map((b) => b.text).join("\n"), ev.currentTarget, "Copied"),
       }, "Copy releases")));
   }
 }
@@ -1949,6 +2144,7 @@ $("#hide-legacy").addEventListener("change", (ev) => {
   state.hideLegacy = ev.target.checked;
   syncURL(false);
   renderMap();
+  syncRailHeight();
   renderStrata();
 });
 $("#filter").addEventListener("input", (ev) => {
@@ -1987,10 +2183,26 @@ $("#map").addEventListener("keydown", (ev) => {
 // A narrower window means a different fit. Only the untouched view follows it: recomputing
 // over a zoom the reader set would undo their work on every resize.
 window.addEventListener("resize", () => {
+  syncRailHeight();
   if (!mapDOM.svg || !world.w) return;
   if (view.dirty) applyView();
   else fitView();
 });
+
+// syncRailHeight ties the rail's cap to the map's own rendered height instead of the
+// viewport. Without this, a node whose release list runs far longer than the map has rows
+// — the case that matters is "All" generations, Supervisor, which can bundle a few dozen
+// patch builds under one line — grows the rail well past its neighbour. Both sit in the
+// same grid row, so the row balloons with them, shoving the strata list far down the page
+// out from under a pointer that never moved: what reads as the screen "going crazy" is
+// really this row-height feedback, not a bug in any one hover handler.
+function syncRailHeight() {
+  const frame = $(".map-frame");
+  const host = $(".map-with-rail");
+  if (!frame || !host) return;
+  const h = frame.getBoundingClientRect().height;
+  if (h > 0) host.style.setProperty("--map-h", `${h}px`);
+}
 
 // Printing wants the whole drawing on the page, not the window onto it.
 if (window.matchMedia) {

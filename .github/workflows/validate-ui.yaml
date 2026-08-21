@@ -1,0 +1,52 @@
+name: validate-ui
+
+# Cross-checks the stack map's drawn connectors against the *live* Broadcom
+# interoperability matrix: every edge the UI renders must land on a cell upstream
+# actually publishes, and its tested/untested flag must match the cell's status.
+#
+# This is deliberately NOT part of `ci`. It reaches upstream over the network and reflects
+# whatever the matrix says today, so it belongs on a schedule rather than on the PR path,
+# where a change in upstream data — not in this repo — could otherwise fail an unrelated
+# build. The hermetic checks in `ci` guard the per-PR path; this guards against the UI and
+# real interop data drifting apart.
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # nightly, 06:17 UTC
+  workflow_dispatch: {} # and on demand
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-ui
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: build
+        run: go build -o vkstack ./cmd/vkstack
+
+      # Refresh and validate in the same run, so the UI and the live matrix describe one
+      # snapshot. No auth key is configured: the validator discovers it from the public
+      # SPA bundle, the same way `refresh` does.
+      - name: refresh cache from upstream
+        run: ./vkstack refresh
+
+      - name: generate the static site
+        run: ./vkstack static --out dist
+
+      - name: cross-check drawn edges against the live matrix
+        run: python3 scripts/validate-ui.py dist

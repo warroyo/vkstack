@@ -2060,6 +2060,52 @@ for (const btn of document.querySelectorAll("#tabs button")) {
   });
 }
 
+// --- theme ------------------------------------------------------------------
+// The palette follows the OS by default. A reader whose browser reports the wrong scheme —
+// an embedded webview that always claims light is the usual culprit — forces it here, and
+// the choice is stored so it survives a reload. The <head> applies a stored choice before
+// first paint; this keeps the toggle's label pointing at the *other* theme after.
+const THEME_KEY = "vkstack.theme";
+
+function osPrefersDark() {
+  return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+}
+
+// What is on screen now, whether it was chosen or inherited from the OS.
+function effectiveTheme() {
+  const set = document.documentElement.getAttribute("data-theme");
+  return set === "dark" || set === "light" ? set : (osPrefersDark() ? "dark" : "light");
+}
+
+function syncThemeToggle() {
+  const btn = $("#theme-toggle");
+  if (btn) btn.setAttribute("aria-label",
+    `Switch to ${effectiveTheme() === "dark" ? "light" : "dark"} theme`);
+}
+
+function setTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "dark" || mode === "light") {
+    root.setAttribute("data-theme", mode);
+    try { localStorage.setItem(THEME_KEY, mode); } catch {}
+  } else {
+    root.removeAttribute("data-theme");
+    try { localStorage.removeItem(THEME_KEY); } catch {}
+  }
+  syncThemeToggle();
+}
+
+$("#theme-toggle")?.addEventListener("click", () => {
+  setTheme(effectiveTheme() === "dark" ? "light" : "dark");
+});
+
+// With no explicit choice the label still has to track the OS if it flips mid-session.
+window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+  if (!document.documentElement.getAttribute("data-theme")) syncThemeToggle();
+});
+
+syncThemeToggle();
+
 // The usage snippets are meant to be pasted into a config file, so they get a button
 // rather than a selection. Same clipboard path as "Copy link", fallback included: the
 // Clipboard API is unavailable on a shared instance served over plain http.

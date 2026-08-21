@@ -1599,28 +1599,32 @@ function renderRecommended() {
   }
   box.classList.remove("hidden");
 
-  const dl = el("dl");
+  const rows = el("tbody");
   let hiddenByFilter = 0;
-  // Bottom-up, matching the map above it. NSX and Avi only appear when the reader has
-  // opted into them, which is exactly when the solver put one in the stack.
-  for (const key of ["vcenter", "esx", "nsx", "avi", "supervisor", "vks", "vkr"]) {
+  // Top-down, reading the same way as the map and the "every version, by layer"
+  // list: VKR at the top, ESX at the bottom. A plain two-column table keeps each
+  // label next to its version so a wide desktop viewport can't wrap the pairs apart.
+  // NSX and Avi only appear when the reader has opted into them, which is exactly
+  // when the solver put one in the stack.
+  for (const key of ["tmc", "vkr", "vks", "supervisor", "avi", "nsx", "vcenter", "esx"]) {
     const pick = state.recommended[key];
     if (!pick) continue;
     // The legacy filter is a view setting; the solver still reaches past it. A
     // recommendation the map is hiding has to say so rather than read as ordinary.
     const hidden = pick.legacy && state.hideLegacy;
     if (hidden) hiddenByFilter++;
-    dl.append(
-      el("dt", {}, labelFor(key)),
-      el("dd", { class: pick.legacy ? `phase-${pick.phase}` : null },
-        pick.version,
-        pick.legacy
-          ? el("span", { class: `phase-tag phase-${pick.phase}` },
-              pick.phase === "end-of-support" ? "EOS" : "TG")
-          : null,
-        hidden ? el("span", { class: "note" }, "hidden by the legacy filter") : null));
+    rows.append(
+      el("tr", {},
+        el("th", { scope: "row" }, labelFor(key)),
+        el("td", { class: pick.legacy ? `phase-${pick.phase}` : null },
+          pick.version,
+          pick.legacy
+            ? el("span", { class: `phase-tag phase-${pick.phase}` },
+                pick.phase === "end-of-support" ? "EOS" : "TG")
+            : null,
+          hidden ? el("span", { class: "note" }, "hidden by the legacy filter") : null)));
   }
-  box.append(el("h2", {}, "Newest working stack from here"), dl);
+  box.append(el("h2", {}, "Newest working stack from here"), el("table", {}, rows));
 
   if (hiddenByFilter > 0) {
     box.append(el("p", { class: "note" },

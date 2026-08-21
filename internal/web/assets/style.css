@@ -491,26 +491,38 @@ button.ghost:hover { color: var(--ink); border-color: var(--muted); }
 
 .recommended h2 { margin: 0 0 0.6rem; }
 
-.recommended dl {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 0.6rem 1.2rem;
+/* A two-column table, one layer per row, top-down like the map. Each label sits
+   next to its version so no viewport can wrap the pair apart. */
+.recommended table {
+  border-collapse: collapse;
   margin: 0;
+  width: 100%;
 }
 
-.recommended dt {
+.recommended th[scope="row"] {
   font-size: 0.68rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  padding: 0.25rem 1.2rem 0.25rem 0;
+  vertical-align: baseline;
 }
 
-.recommended dd { margin: 0.1rem 0 0; font-family: var(--mono); font-size: 0.85rem; }
+.recommended td {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0.25rem 0;
+  vertical-align: baseline;
+  width: 100%;
+}
 
 /* The solver reaches past the legacy filter, so a recommendation can name a release the
    map is hiding. It is coloured like the node would have been, and says so in words. */
-.recommended dd.phase-technical-guidance { color: var(--tg); }
-.recommended dd.phase-end-of-support { color: var(--eos); }
+.recommended td.phase-technical-guidance { color: var(--tg); }
+.recommended td.phase-end-of-support { color: var(--eos); }
 
 .recommended .note {
   display: block;

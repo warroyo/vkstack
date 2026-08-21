@@ -190,8 +190,8 @@ Tools: `vkstack_stack`, `vkstack_check`, `vkstack_compat`, `vkstack_releases`,
 `structuredContent`, so a client that supports structured results need not re-parse.
 
 `vkstack_stack` takes an optional `include` array naming the optional products to put in
-the stack — `["nsx"]`, `["avi"]`, or `["nsx", "avi"]`. Each stands alone; omit it for the
-five core products only. `vkstack_products` marks which products are `optional`, so the
+the stack — `["nsx"]`, `["avi"]`, `["tmc"]`, or any combination. Each stands alone; omit
+it for the five core products only. `vkstack_products` marks which products are `optional`, so the
 valid values are discoverable rather than something to hardcode.
 
 A failed call comes back as a tool result with `isError: true` and the reason in text,
@@ -212,21 +212,24 @@ the six things most likely to produce a confidently wrong conclusion:
    VKS runs on the Supervisor, VKr is provisioned by VKS, Avi is placed through vCenter.
    They are reported, never enforced. Enforcing them produces combinations listed as
    compatible that cannot exist, and rules out combinations that work.
-2. **NSX and Avi are optional, and independent of each other.** Neither is in a solved
-   stack unless it is pinned or named in `stack --with` / the MCP `include` array. All
-   four combinations are real deployments: neither, NSX alone, **Avi alone** (a
-   Supervisor on a distributed switch with Avi in front of it), or both. Asking for one
-   never brings in the other, and **Avi does not require NSX**. A stack that does not
-   mention NSX is a complete answer about the five core products — not a claim that the
-   deployment has no NSX.
+2. **NSX, Avi and TMC Self-Managed are optional, and independent of each other.** None is
+   in a solved stack unless it is pinned or named in `stack --with` / the MCP `include`
+   array. For the networking pair all four combinations are real deployments: neither, NSX
+   alone, **Avi alone** (a Supervisor on a distributed switch with Avi in front of it), or
+   both; asking for one never brings in another, and **Avi does not require NSX**. A stack
+   that does not mention NSX is a complete answer about the five core products — not a
+   claim that the deployment has no NSX. TMC Self-Managed is the one optional product that
+   *is* a real dependency: it is versioned against vCenter, VKS and VKr, all three
+   published, and enforced when it is in the stack.
 3. **ESX × Avi is published and almost entirely blank.** At the time of writing three
    cells in the whole grid say yes, all of them Avi 32.1.1 against ESX 9.1.x. It is not a
    dependency and is never enforced. If you enforce it yourself you will reject Avi
    deployments that plainly work.
-4. **Seven of the twenty-one product pairs have no upstream data at all** (ESX×VKS,
-   ESX×VKr, Supervisor×VKr, NSX×VKS, NSX×VKr, Avi×VKS, Avi×VKr). "No data published" is
-   not "incompatible", and the tool never reports a stack as verified on a pair nobody
-   published. Do not fill that gap with a guess.
+4. **Eleven of the twenty-eight product pairs have no upstream data at all** (ESX×VKS,
+   ESX×VKr, Supervisor×VKr, NSX×VKS, NSX×VKr, Avi×VKS, Avi×VKr, and TMC-SM against ESX,
+   NSX, Avi and the Supervisor). "No data published" is not "incompatible", and the tool
+   never reports a stack as verified on a pair nobody published. Do not fill that gap with
+   a guess.
 5. **A missing cell is a no.** Inside a pair upstream *does* publish, two releases with no
    result between them are the matrix declining to list them together — not an open
    question.

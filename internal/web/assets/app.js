@@ -49,8 +49,9 @@ function openLayer(key) {
 //
 // The value is a cache key on a static build, where every answer was enumerated ahead of
 // time, so "nsx,avi" and "avi,nsx" have to be the same string or half the lookups miss.
-// This is the model's own product order.
-const OPTIONAL_ORDER = ["nsx", "avi"];
+// This is the model's own product order (model.optionalKeys / static optionalSubsets),
+// so it must stay in step with it — TMC-SM is the third optional layer.
+const OPTIONAL_ORDER = ["nsx", "avi", "tmc"];
 const withParam = () =>
   OPTIONAL_ORDER.filter((k) => state.include.includes(k)).join(",");
 

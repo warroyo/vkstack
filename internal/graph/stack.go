@@ -28,11 +28,12 @@ type Stack struct {
 // Inferred returns constraining pairs in this stack that upstream does not publish — the
 // ones taken on trust.
 //
-// With the constraint set as narrow as it is this is normally empty: all seven gaps in the
-// matrix fall outside it. Three are the long-standing ones (ESX against VKS and VKr,
-// Supervisor against VKr); the other four are NSX and Avi against VKS and VKr, and neither
-// optional component is a dependency of the guest cluster layer. So nothing has to be
-// inferred to validate a stack.
+// With the constraint set as narrow as it is this is normally empty: all eleven gaps in
+// the matrix fall outside it. Three are the long-standing ones (ESX against VKS and VKr,
+// Supervisor against VKr); four are NSX and Avi against VKS and VKr, neither a dependency
+// of the guest cluster layer; and the last four are TMC Self-Managed against ESX, NSX, Avi
+// and the Supervisor — none of them one of its three dependencies, which are all published.
+// So nothing has to be inferred to validate a stack.
 func (s Stack) Inferred() []PairVerdict {
 	var out []PairVerdict
 	for _, v := range s.Verdicts {
@@ -91,8 +92,8 @@ type StackFailure struct {
 //
 // Products are filled in most-constrained-first order (the Kubernetes chain before the
 // base layer), and a partial assignment is abandoned as soon as any *published* pair
-// against an already-assigned product is not compatible. Unpublished pairs — seven of
-// the twenty-one — cannot constrain anything, so they are skipped during the search and
+// against an already-assigned product is not compatible. Unpublished pairs — eleven of
+// the twenty-eight — cannot constrain anything, so they are skipped during the search and
 // reported afterwards as inferred.
 //
 // Optional products take part only when pinned or named in opts.Include, and each is
@@ -368,8 +369,8 @@ func (g *Graph) ViableOptions(pins map[int]*Release, opts StackOptions) map[int]
 //
 // The Kubernetes chain is filled before the base layer: Supervisor, VKS and VKr have far
 // fewer viable options per vCenter than the reverse, so choosing them first prunes the
-// search hardest. NSX and Avi sit between the two: more constrained than vCenter, less
-// than the Supervisor.
+// search hardest. TMC Self-Managed follows the chain, since it depends on VKr. NSX and Avi
+// sit between the two: more constrained than vCenter, less than the Supervisor.
 //
 // Optional products only appear here when the caller pinned them or asked for them by
 // key. Each is decided on its own — no optional product implies another — so opting into
@@ -379,10 +380,11 @@ func solveOrder(pins map[int]*Release, opts StackOptions) []int {
 		"supervisor": 0,
 		"vks":        1,
 		"vkr":        2,
-		"nsx":        3,
-		"avi":        4,
-		"vcenter":    5,
-		"esx":        6,
+		"tmc":        3,
+		"nsx":        4,
+		"avi":        5,
+		"vcenter":    6,
+		"esx":        7,
 	})
 }
 
@@ -399,8 +401,8 @@ func solveOrder(pins map[int]*Release, opts StackOptions) []int {
 // Supervisor's newness as the whole stack's.
 //
 // The platform decides instead. vCenter and ESX are what a deployment is upgraded around,
-// so newest-first means newest vCenter first, and the Kubernetes chain is filled beneath
-// whatever that allows.
+// so newest-first means newest vCenter first, the Kubernetes chain is filled beneath
+// whatever that allows, and TMC Self-Managed is filled last on top of the chain.
 func recommendOrder(pins map[int]*Release, opts StackOptions) []int {
 	return orderBy(pins, opts, map[string]int{
 		"vcenter":    0,
@@ -410,6 +412,7 @@ func recommendOrder(pins map[int]*Release, opts StackOptions) []int {
 		"supervisor": 4,
 		"vks":        5,
 		"vkr":        6,
+		"tmc":        7,
 	})
 }
 

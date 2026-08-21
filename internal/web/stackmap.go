@@ -138,6 +138,12 @@ func lineKey(p model.Product, r *graph.Release) string {
 		if len(r.Version.Key) > 0 && len(r.Version.Key[0]) >= 2 {
 			return fmt.Sprintf("%d.%d", r.Version.Major(), r.Version.Key[0][1])
 		}
+	case "tmc":
+		// Every release stands alone, like vCenter: TMC-SM's compatibility is published
+		// per exact release, and the patch decides the answer. TMC 1.4.5 pairs with VKr
+		// 1.36 and five 1.35 builds; 1.4.4 pairs with neither 1.36 nor most of 1.35.
+		// Grouping 1.4.x into one node would throw those answers away.
+		return r.Raw
 	case "supervisor":
 		// Kubernetes minor *and* train: the two trains are not interchangeable.
 		if minor, ok := version.K8sMinor(r.Version, p); ok {
@@ -245,6 +251,7 @@ type mapLayer struct {
 var optionalLayerNotes = map[string]string{
 	"nsx": "Only when the Supervisor runs on NSX networking.",
 	"avi": "Only when Avi is the load balancer. Does not require NSX.",
+	"tmc": "Only with a self-hosted management plane. Runs on the guest-cluster layer.",
 }
 
 // optionalFromQuery parses the `with` parameter into optional product keys.
@@ -292,9 +299,9 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Layers run bottom-up: the base you build on first. NSX and Avi sit between the
-	// hypervisor and the Supervisor, and come back marked Optional so the client can keep
-	// them collapsed.
-	order := []string{"vcenter", "nsx", "avi", "supervisor", "vks", "vkr"}
+	// hypervisor and the Supervisor, and TMC-SM sits on top of the guest-cluster layer;
+	// all three come back marked Optional so the client can keep them collapsed.
+	order := []string{"vcenter", "nsx", "avi", "supervisor", "vks", "vkr", "tmc"}
 	layers := make([]mapLayer, 0, len(order))
 	nodeReleases := map[string][]*graph.Release{}
 
@@ -742,7 +749,8 @@ func describeSupervisor(rels []*graph.Release, pinnedVCenter string, vcenterRele
 //
 // A linear walk down the rendered layers used to be equivalent, because the layers were
 // the chain. They are not any more: NSX and Avi sit between vCenter and the Supervisor
-// without displacing the vCenter-to-Supervisor edge, and either can be absent.
+// without displacing the vCenter-to-Supervisor edge, TMC-SM hangs off vCenter, VKS and VKr
+// at the top of the chain, and any of them can be absent.
 //
 // A collapsed optional layer contributes nothing. That keeps the default map identical
 // to what it was, and keeps the cost down — every candidate pair below costs one solve

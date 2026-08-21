@@ -172,8 +172,8 @@ func TestUnknownsCoverEveryUnpublishedPair(t *testing.T) {
 
 func TestKnownUnpublishedPairsMatchesDefaultCoverage(t *testing.T) {
 	pairs := KnownUnpublishedPairs()
-	if len(pairs) != 7 {
-		t.Fatalf("expected 7 known-unpublished pairs, got %d", len(pairs))
+	if len(pairs) != 11 {
+		t.Fatalf("expected 11 known-unpublished pairs, got %d", len(pairs))
 	}
 	for _, p := range pairs {
 		if DefaultCoverage(p[0], p[1]) {

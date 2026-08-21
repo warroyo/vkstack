@@ -324,8 +324,8 @@ func TestConstraintSetMatchesTheDocumentedOne(t *testing.T) {
 				name, got, want)
 		}
 	}
-	if len(model.Edges) != 15 {
-		t.Errorf("edge count is %d, was 15 — a new relationship needs a constraint decision",
+	if len(model.Edges) != 18 {
+		t.Errorf("edge count is %d, was 18 — a new relationship needs a constraint decision",
 			len(model.Edges))
 	}
 }

@@ -1,8 +1,8 @@
 # vkstack
 
-Compatibility across vCenter, ESX, vSphere Supervisor, VKS and VKr (plus optional NSX
-and Avi Load Balancer), from the Broadcom Product Interoperability Matrix, with support
-dates from the Broadcom Product Lifecycle matrix.
+Compatibility across vCenter, ESX, vSphere Supervisor, VKS and VKr (plus optional NSX,
+Avi Load Balancer and TMC Self-Managed), from the Broadcom Product Interoperability
+Matrix, with support dates from the Broadcom Product Lifecycle matrix.
 
 > **Unofficial.** Not affiliated with or endorsed by Broadcom. Broadcom publishes no
 > public API for either matrix, so this calls the same private JSON endpoints their own
@@ -141,8 +141,8 @@ Only real dependencies constrain a stack. The chain is:
 VKr  →  VKS  →  Supervisor  →  vCenter  ↔  ESX
 ```
 
-NSX and Avi hang off that chain rather than sitting in it, and each is opted into on its
-own:
+NSX and Avi hang off that chain rather than sitting in it, TMC Self-Managed sits on top
+of the guest-cluster layer, and each is opted into on its own:
 
 ```
         NSX  ─┐
@@ -150,10 +150,11 @@ own:
         Avi  ─┘
 ```
 
-Both are optional, and neither implies the other. They start as collapsed rows; open one
+All three are optional, and none implies another. They start as collapsed rows; open one
 and it becomes a layer like any other, with its own versions to pick from. Opening NSX
 leaves Avi closed, and Avi in front of a distributed switch with no NSX anywhere is an
-ordinary deployment.
+ordinary deployment. TMC Self-Managed differs from the networking pair in one way: it is
+a genuine dependency, versioned against vCenter, VKS and VKr and enforced when opened.
 
 The matrix also publishes vCenter against VKS, vCenter against VKr, and ESX against Avi.
 Those are worth looking up, but they are not dependencies, because VKS runs on the
@@ -190,7 +191,8 @@ Four things are grouped deliberately.
   each vCenter node instead of a row nobody can branch from.
 - NSX and Avi are grouped by major.minor line, since neither carries a Kubernetes
   version to group on: NSX `9.1` covers 9.1.0.0 through 9.1.0.0200, Avi `32.1` covers
-  32.1.1 and 32.1.2.
+  32.1.1 and 32.1.2. TMC-SM is *not* grouped — like vCenter, its compatibility is
+  published per exact release, so each build is its own node.
 
 ### Support lifecycle
 
@@ -370,24 +372,29 @@ nothing running that could refresh itself.
 
 ## Two things worth knowing
 
-NSX and Avi are optional, and independent of each other. Neither appears in a solved
-stack unless you pin it or ask for it, because neither is in every deployment: a
+NSX, Avi and TMC Self-Managed are optional, and independent of each other. None appears
+in a solved stack unless you pin it or ask for it, because none is in every deployment: a
 Supervisor runs on NSX networking, or on a vSphere Distributed Switch with Avi in front
-of it, or on neither. Asking for one never brings in the other, since **Avi does not
-require NSX**, and a stack that says nothing about NSX is a complete answer about the
-five core components, not a claim that you have no NSX.
+of it, or on neither, and TMC Self-Managed is a self-hosted management plane installed on
+top of the guest-cluster layer. Asking for one never brings in another, since **Avi does
+not require NSX**, and a stack that says nothing about NSX is a complete answer about the
+five core components, not a claim that you have no NSX. TMC Self-Managed is the one
+optional product that is a genuine dependency — versioned against vCenter, VKS and VKr,
+and enforced when it is in the stack.
 
 ```sh
 vkstack stack vcenter 9.1.0.0300 --with nsx        # NSX, no Avi
 vkstack stack vcenter 9.1.0.0300 --with avi        # Avi on VDS, no NSX
 vkstack stack vcenter 9.1.0.0300 --with nsx,avi    # both
 vkstack stack --avi 32.1.2                         # a pin is its own opt-in
+vkstack stack vcenter 9.1.0.0300 --with tmc        # TMC Self-Managed on top
 ```
 
 In the web UI they are two collapsed rows you open one at a time.
 
-Seven of the twenty-one product pairs have no upstream data. ESX × VKS, ESX × VKr,
-Supervisor × VKr, and NSX and Avi each against VKS and VKr return nothing at all. So
+Eleven of the twenty-eight product pairs have no upstream data. ESX × VKS, ESX × VKr,
+Supervisor × VKr, NSX and Avi each against VKS and VKr, and TMC-SM against ESX, NSX, Avi
+and the Supervisor return nothing at all. So
 "compatible", "incompatible" and "no data published" are kept distinct everywhere, and a
 stack is never reported as verified on a pair that was never published. The
 Supervisor × VKr gap is the one that matters, and it is inferred through vCenter and VKS.
@@ -403,8 +410,8 @@ matrix declining to list them together, so they cannot appear in one stack, whet
 solver picked them or you pinned them. Pinning two such releases reports that they are
 never listed together, rather than solving a stack around a combination nobody published.
 
-Only vCenter and ESX 8.0 U3 and later are in scope. Supervisor, VKS, VKr, NSX and Avi
-have no hardcoded floor; they are filtered by reachability instead, so anything that only
+Only vCenter and ESX 8.0 U3 and later are in scope. Supervisor, VKS, VKr, NSX, Avi and
+TMC-SM have no hardcoded floor; they are filtered by reachability instead, so anything that only
 ever worked with vSphere 7 drops out on its own. That is what retires the older NSX and
 Avi lines without inventing a cutoff. `--all-versions` disables the floor and
 `--min-version vcenter=9.0.0.0` moves it. The floor is applied when the cache is read, not

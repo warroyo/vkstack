@@ -211,7 +211,7 @@ func (c CheckResult) Incompatible() []PairVerdict {
 // and the map lit peers a release was never published against.
 //
 // Unverified pairs whose *product pair* upstream does not publish at all are a different
-// thing and still pass: seven of the twenty-one have no data by design.
+// thing and still pass: eleven of the twenty-eight have no data by design.
 func (c CheckResult) Blocking() []PairVerdict {
 	var out []PairVerdict
 	for _, p := range c.Pairs {
@@ -246,7 +246,7 @@ func (c CheckResult) Unverified() []PairVerdict {
 }
 
 // OK reports whether nothing actively fails. Unverified pairs are a warning, not a
-// failure — seven of the twenty-one pairs have no upstream data by design.
+// failure — eleven of the twenty-eight pairs have no upstream data by design.
 func (c CheckResult) OK() bool { return len(c.Incompatible()) == 0 }
 
 // Check validates every pair of a pinned stack, keyed by product id.

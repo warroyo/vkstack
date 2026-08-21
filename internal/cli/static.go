@@ -462,6 +462,25 @@ func writeSite(outDir string, bundles map[bundleKey]*siteData) error {
 			return fmt.Errorf("writing %s: %w", name, err)
 		}
 	}
+
+	// Cloudflare Pages caches static assets for four hours by default, and this build gives
+	// every asset a stable name across deploys — so without an override a publish is invisible
+	// to anyone who visited in the last four hours, the JS and CSS pinned to their old copies
+	// while a hard reload is the only way through. A _headers file at the site root drops the
+	// asset TTL to zero: the browser revalidates each load, and the etag Pages already sends
+	// turns the check into a 304 when nothing changed, so the cost is a conditional request,
+	// not a re-download. index.html is already served this way; this extends it to the rest.
+	const headers = `# Managed by "vkstack static" — see writeSite in internal/cli/static.go.
+/app.js
+  Cache-Control: public, max-age=0, must-revalidate
+/style.css
+  Cache-Control: public, max-age=0, must-revalidate
+/*.json
+  Cache-Control: public, max-age=0, must-revalidate
+`
+	if err := os.WriteFile(filepath.Join(outDir, "_headers"), []byte(headers), 0o644); err != nil {
+		return fmt.Errorf("writing _headers: %w", err)
+	}
 	return nil
 }
 

@@ -470,10 +470,14 @@ func writeSite(outDir string, bundles map[bundleKey]*siteData) error {
 	// asset TTL to zero: the browser revalidates each load, and the etag Pages already sends
 	// turns the check into a 304 when nothing changed, so the cost is a conditional request,
 	// not a re-download. index.html is already served this way; this extends it to the rest.
+	//
+	// The rules are wildcards on purpose: Pages honoured a `/*.json` pattern but silently
+	// ignored exact `/app.js` and `/style.css` paths for files it already serves itself, so
+	// the extension globs are what actually take.
 	const headers = `# Managed by "vkstack static" — see writeSite in internal/cli/static.go.
-/app.js
+/*.js
   Cache-Control: public, max-age=0, must-revalidate
-/style.css
+/*.css
   Cache-Control: public, max-age=0, must-revalidate
 /*.json
   Cache-Control: public, max-age=0, must-revalidate

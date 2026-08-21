@@ -202,15 +202,15 @@ func (s *mcpServer) handle(req rpcRequest) rpcResponse {
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "vkstack", "version": "1"},
 			"instructions": "Compatibility across vCenter, ESX, vSphere Supervisor, VKS " +
-				"and VKr, plus optional NSX and Avi Load Balancer, from a local mirror of " +
+				"and VKr, plus optional NSX, Avi Load Balancer and TMC Self-Managed, from a local mirror of " +
 				"the Broadcom interoperability matrix. " +
 				"Start with vkstack_stack to solve a whole valid stack from one pinned " +
 				"version; vkstack_check validates a stack you already have. " +
-				"NSX and Avi are optional and independent of each other: neither appears " +
+				"NSX, Avi and TMC Self-Managed are optional and independent of each other: none appears " +
 				"in a stack unless it is pinned or named in vkstack_stack's `include`, " +
 				"and a stack without them is a complete answer, not a partial one. " +
-				"Asking for one never brings in the other — Avi on a distributed switch " +
-				"with no NSX is an ordinary deployment. " +
+				"Asking for one never brings in another — Avi on a distributed switch " +
+				"with no NSX is an ordinary deployment. TMC Self-Managed is the one optional product that is a real dependency: it is versioned against vCenter, VKS and VKr and enforced when present. " +
 				"`generation` narrows to one vSphere platform generation by vCenter " +
 				"major. It constrains vCenter alone: ESX 8.x, NSX 4.x, Avi 31.x and the " +
 				"Supervisor vsc0 train all pair with vCenter 9 upstream and stay on offer " +
@@ -257,7 +257,7 @@ func mcpTools() []map[string]any {
 			"description": "Solve a whole valid stack from one or more pinned versions. " +
 				"The headline query: given vCenter 8.0U3k, what Supervisor, VKS and VKr " +
 				"can run with it. Returns the newest valid combination plus every " +
-				"alternative each layer could still take. NSX and Avi are left out " +
+				"alternative each layer could still take. NSX, Avi and TMC-SM are left out " +
 				"unless pinned or listed in `include`.",
 			"inputSchema": map[string]any{
 				"type": "object",
@@ -345,13 +345,13 @@ func mcpTools() []map[string]any {
 		{
 			"name": "vkstack_products",
 			"description": "The products in scope, their release counts, and which of " +
-				"the 21 product pairs upstream actually publishes.",
+				"the 28 product pairs upstream actually publishes.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{
 			"name": "vkstack_model",
-			"description": "How the seven products — five core, plus optional NSX and " +
-				"Avi — depend on each other, how each " +
+			"description": "How the eight products — five core, plus optional NSX, Avi and " +
+				"TMC Self-Managed — depend on each other, how each " +
 				"relationship is known (published, inferred, or operational knowledge), " +
 				"and what this tool does not know. Read this before reasoning about the " +
 				"stack — it is the part that prevents wrong conclusions.",

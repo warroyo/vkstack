@@ -57,8 +57,9 @@ func surface() map[string]any {
 	return map[string]any{
 		"tool": "vkstack",
 		"purpose": "Answer compatibility questions across vCenter, ESX, vSphere " +
-			"Supervisor, VKS and VKr — plus optional NSX and Avi Load Balancer — from a " +
-			"local mirror of the Broadcom Product Interoperability Matrix.",
+			"Supervisor, VKS and VKr — plus optional NSX, Avi Load Balancer and TMC " +
+			"Self-Managed — from a local mirror of the Broadcom Product " +
+			"Interoperability Matrix.",
 		"output": map[string]any{
 			"default": "json",
 			"envelope": map[string]any{
@@ -93,23 +94,27 @@ func surface() map[string]any {
 				"genuinely works with both generations is offered under both.",
 			"dependencyChain": []string{"vcenter", "esx", "supervisor", "vks", "vkr"},
 			"upgradeOrder":    model.UpgradeOrder(),
-			"optionalProducts": "NSX and Avi are absent from a solved stack unless pinned " +
-				"or passed to `stack --with`. They are independent of each other: " +
-				"--with avi solves a stack with Avi and no NSX, which is an ordinary " +
-				"distributed-switch deployment. A stack without them is a complete " +
+			"optionalProducts": "NSX, Avi and TMC Self-Managed are absent from a solved " +
+				"stack unless pinned or passed to `stack --with`. They are independent of " +
+				"each other: --with avi solves a stack with Avi and no NSX, which is an " +
+				"ordinary distributed-switch deployment. A stack without them is a complete " +
 				"answer about the five core products, not a claim that the deployment " +
-				"has no NSX.",
-			"enforcedPairs": "Ten of the 21 pairs are allowed to decide a stack. " +
+				"has no NSX. TMC Self-Managed is the one optional product that is a real " +
+				"dependency — versioned against vCenter, VKS and VKr, and enforced when " +
+				"it is in the stack.",
+			"enforcedPairs": "Thirteen of the 28 pairs are allowed to decide a stack. " +
 				"vCenter×VKS and vCenter×VKr are published but not dependencies: VKS runs " +
 				"on the Supervisor and VKr is provisioned by VKS. ESX×NSX and ESX×Avi are " +
 				"real dependencies that are still not enforced, because vCenter and ESX " +
 				"move together and both optional products are already constrained against " +
 				"vCenter, so the host pair rules out nothing the vCenter pair does not — " +
 				"and ESX×Avi is almost entirely blank upstream besides. All four are " +
-				"reported, never used to include or exclude.",
+				"reported, never used to include or exclude. TMC Self-Managed adds three " +
+				"enforced pairs: TMC×vCenter, TMC×VKS and TMC×VKr.",
 			"unpublishedPairs": "ESX×VKS, ESX×VKr, Supervisor×VKr, NSX×VKS, NSX×VKr, " +
-				"Avi×VKS and Avi×VKr have no upstream data at all. Answers touching them " +
-				"are labelled inferred, never verified.",
+				"Avi×VKS, Avi×VKr, and TMC-SM against ESX, NSX, Avi and the Supervisor " +
+				"have no upstream data at all. Answers touching them are labelled " +
+				"inferred, never verified.",
 			"supportPhases": []string{"general", "technical-guidance", "end-of-support"},
 			"testedVsNot": "Status 3 is 'compatible, not tested'. It counts as a yes when " +
 				"solving, and is always reported as its own state.",

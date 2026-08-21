@@ -50,14 +50,17 @@ type Product struct {
 	// that omits one is a complete answer, not a partial one, so the solver leaves it out
 	// unless the caller pins it or asks for it by name.
 	//
-	// Optional products are independent of each other. NSX and Avi are each opted into on
-	// their own, and all four combinations — neither, either one alone, both — are real
-	// deployments. Nothing may treat one as implying the other.
+	// Optional products are independent of each other and opted into one at a time; nothing
+	// may treat one as implying another. NSX and Avi are the networking pair — all four
+	// combinations (neither, either alone, both) are real deployments — and TMC Self-Managed
+	// is a management plane installed on top of the guest-cluster layer.
 	//
-	// They are also deliberately narrow in what they constrain: NSX and Avi are enforced
-	// against each other, the Supervisor and vCenter, and nothing else. The pairs upstream
-	// publishes against ESX are reported but never enforced — vCenter and ESX move
-	// together, so the host pair excludes nothing the vCenter pair does not.
+	// What each constrains differs. NSX and Avi are deliberately narrow: enforced against
+	// each other, the Supervisor and vCenter, and nothing else — the pairs upstream
+	// publishes against ESX are reported but never enforced, because vCenter and ESX move
+	// together so the host pair excludes nothing the vCenter pair does not. TMC Self-Managed
+	// is the opposite: a real dependency of vCenter, VKS and VKr, all three published and
+	// enforced when it is in the stack.
 	Optional bool
 	// Lifecycle says where this product's published support dates live. A zero value
 	// means the lifecycle portal has nothing for it and only the matrix flags apply.
@@ -133,11 +136,12 @@ func (l Lifecycle) Keeps(description string) bool {
 	return false
 }
 
-// Products are the seven components in scope, in diagram order.
+// Products are the eight components in scope, in diagram order.
 //
-// Five are always part of a stack. NSX and Avi are Optional: they sit between the
-// hypervisor and the Supervisor, they are opted into individually, and a stack without
-// either is still a complete answer.
+// Five are always part of a stack. Three are Optional: NSX and Avi sit between the
+// hypervisor and the Supervisor, and TMC Self-Managed sits on top of the guest-cluster
+// layer. Each is opted into individually, and a stack without any of them is still a
+// complete answer.
 //
 // VCF is deliberately absent: it is a wrapper bill-of-materials over these component
 // versions, not an independent compatibility axis.
@@ -235,6 +239,28 @@ var Products = []Product{
 		Lifecycle: Lifecycle{
 			ProductName:         "vSphere Kubernetes releases",
 			Match:               MatchMinor,
+			NoTechnicalGuidance: true,
+		},
+	},
+	{
+		Key: "tmc", ID: 1771, Name: "Tanzu Mission Control Self-Managed", Label: "TMC-SM",
+		Scheme: SchemeGeneric, Example: "1.4.5",
+		K8sMinorRun: -1, UpgradeOrder: 8, Optional: true,
+		// Optional, and the one optional product that is a genuine dependency: it is a
+		// management plane installed on top of a guest cluster, versioned against vCenter,
+		// VKS and VKr, all three published in the matrix. It has no version floor of its
+		// own — reachability through vCenter drops any release that only ever paired with
+		// a vSphere line now out of scope.
+		//
+		// Sourced by description: the portal files it under a handful of casings
+		// ("Self-managed", "Self-Managed", and a couple with the version appended), so the
+		// Keep prefix collects them all while excluding the Cloud Director extension that
+		// shares the "Tanzu Mission Control" name. Releases match verbatim ("1.4.5"), so
+		// the exact join needs no fallback. Like VKS and VKr the portal publishes no end of
+		// technical guidance, so passing end of general support ends support outright.
+		Lifecycle: Lifecycle{
+			Description:         "Tanzu Mission Control Self-managed",
+			Keep:                []string{"Tanzu Mission Control Self-*"},
 			NoTechnicalGuidance: true,
 		},
 	},
@@ -466,6 +492,32 @@ var Edges = []Edge{
 			"exclude.",
 		Evidence: EvidencePublished,
 	},
+	{
+		From: "vcenter", To: "tmc", Label: "management plane",
+		Summary: "TMC Self-Managed is versioned against the vCenter it manages.",
+		Prose: "TMC Self-Managed is optional — it is installed only where a self-hosted " +
+			"management plane is wanted — but where it is deployed it drives vCenter to " +
+			"place and manage the clusters it governs, and that pairing is versioned. " +
+			"Upstream publishes this pair directly, so it is enforced when TMC is in the " +
+			"stack.",
+		Primary: true, Evidence: EvidencePublished,
+	},
+	{
+		From: "vks", To: "tmc", Label: "manages",
+		Summary: "TMC Self-Managed runs on the cluster VKS provisions, and is paired with it.",
+		Prose: "TMC Self-Managed is installed on a guest cluster VKS provisions and manages " +
+			"the fleet from there, so the VKS version it runs against is paired with it. " +
+			"Upstream publishes this pair directly.",
+		Primary: true, Evidence: EvidencePublished,
+	},
+	{
+		From: "vkr", To: "tmc", Label: "runs on",
+		Summary: "TMC Self-Managed runs on a VKr Kubernetes release, which bounds its version.",
+		Prose: "TMC Self-Managed runs on a specific VKr Kubernetes release, and the guest " +
+			"cluster's Kubernetes version bounds which TMC versions can be installed. " +
+			"Upstream publishes this pair directly.",
+		Primary: true, Evidence: EvidencePublished,
+	},
 }
 
 // Lookups are built once from the tables above. Products is a handful of entries, so a
@@ -540,7 +592,7 @@ func IDs() []int {
 }
 
 // Pairs returns every unordered product-id pair, with the lower id first. These are the
-// twenty-one pairs `refresh` probes and `pair_coverage` records.
+// twenty-eight pairs `refresh` probes and `pair_coverage` records.
 //
 // Optional products are included: whether a deployment has NSX or Avi is a question for
 // the solver, not for the mirror, and the cache stays a dumb copy of upstream.

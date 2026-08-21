@@ -14,12 +14,14 @@ type Coverage func(aProductID, bProductID int) bool
 func AllPublished(int, int) bool { return true }
 
 // knownUnpublished is the set of product pairs upstream did not publish when this was
-// last verified against the live API (2026-08-10). It exists so `vkstack explain` and
-// the generated docs/model.md are correct on a cold install with no cache.
+// last verified against the live API (the original seven on 2026-08-10, the four TMC-SM
+// pairs on 2026-08-21). It exists so `vkstack explain` and the generated docs/model.md
+// are correct on a cold install with no cache.
 //
-// Seven of the twenty-one pairs. Every gap is against VKS or VKr: neither NSX nor Avi is
-// published against the guest-cluster layer, which is consistent with neither being a
-// dependency of it.
+// Eleven of the twenty-eight pairs. Seven are against VKS or VKr — neither NSX nor Avi is
+// published against the guest-cluster layer, consistent with neither being a dependency of
+// it. The other four are TMC Self-Managed against everything that is not one of its three
+// dependencies: it is published against vCenter, VKS and VKr, and against nothing else.
 //
 // A populated cache always overrides this — see the cache-backed Coverage in the CLI.
 // TestCoverageMatchesUpstream in internal/graph compares the two and fails if upstream
@@ -32,6 +34,10 @@ var knownUnpublished = map[[2]int]bool{
 	{912, 1794}:  true, // NSX × VKS
 	{820, 1795}:  true, // VKr × Avi
 	{1794, 1795}: true, // VKS × Avi
+	{1, 1771}:    true, // ESX × TMC-SM
+	{912, 1771}:  true, // NSX × TMC-SM
+	{1378, 1771}: true, // Supervisor × TMC-SM
+	{1771, 1795}: true, // TMC-SM × Avi
 }
 
 // DefaultCoverage reports the pair coverage observed against the live API, for use when
@@ -194,7 +200,13 @@ func ASCII(covered Coverage) string {
 	b.WriteString("                  ┌──────────────────┐\n")
 	b.WriteString("                  │       VKr        │  the guest cluster's actual\n")
 	b.WriteString("                  │      1.36.1      │  Kubernetes release\n")
-	b.WriteString("                  └──────────────────┘\n")
+	b.WriteString("                  └────────┬─────────┘\n")
+	b.WriteString("                           │ runs on\n")
+	b.WriteString("                           ▼\n")
+	b.WriteString("                  ╎ ─ ─ ─ ─ ─ ─ ─ ─ ╎  OPTIONAL: a self-hosted management\n")
+	b.WriteString("                  ╎     TMC-SM      ╎  plane, versioned against vCenter,\n")
+	b.WriteString("                  ╎      1.4.5      ╎  VKS and VKr — all three published\n")
+	b.WriteString("                  ╎ ─ ─ ─ ─ ─ ─ ─ ─ ╎  and enforced when it is present\n")
 	b.WriteString("\n")
 
 	var unpublished []string
@@ -329,14 +341,16 @@ func orderedLabels() []string {
 // what lands in docs/model.md and what `vkstack explain` prints.
 func Doc(covered Coverage) string {
 	var b strings.Builder
-	b.WriteString("# How vCenter, ESX, NSX, Avi, Supervisor, VKS and VKr fit together\n\n")
+	b.WriteString("# How vCenter, ESX, NSX, Avi, Supervisor, VKS, VKr and TMC-SM fit together\n\n")
 	b.WriteString("The Broadcom interoperability matrix answers one question at a time:\n")
 	b.WriteString("\"is A compatible with B\". This is the shape of the whole dependency,\n")
 	b.WriteString("which is the part that usually has to be drawn on a whiteboard.\n\n")
-	b.WriteString("Five of these are in every stack. **NSX and Avi are optional and\n")
+	b.WriteString("Five of these are in every stack. **NSX, Avi and TMC-SM are optional and\n")
 	b.WriteString("independent**: a Supervisor runs on NSX networking, or on a vSphere\n")
-	b.WriteString("Distributed Switch with Avi in front of it, or on neither. Opt into each\n")
-	b.WriteString("on its own — asking for one never brings in the other.\n\n")
+	b.WriteString("Distributed Switch with Avi in front of it, or on neither; TMC Self-Managed\n")
+	b.WriteString("is installed on top of the guest-cluster layer where a self-hosted management\n")
+	b.WriteString("plane is wanted. Opt into each on its own — asking for one never brings in\n")
+	b.WriteString("another.\n\n")
 	b.WriteString("```mermaid\n")
 	b.WriteString(Mermaid(covered))
 	b.WriteString("```\n\n")

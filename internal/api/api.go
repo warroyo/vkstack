@@ -148,7 +148,7 @@ type CompatEdge struct {
 // MatrixResult is one product pair's worth of compatibility data.
 type MatrixResult struct {
 	// Published is false when upstream returned a bare {} for this pair, meaning no
-	// data exists rather than "nothing is compatible". Seven of the 21 pairs in scope
+	// data exists rather than "nothing is compatible". Eleven of the 28 pairs in scope
 	// are unpublished.
 	Published bool
 	Edges     []CompatEdge

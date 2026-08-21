@@ -18,7 +18,7 @@ func newRefreshCmd() *cobra.Command {
 		Short: "Pull the latest compatibility data from the interop API into the local cache",
 		Long: `Pull the latest compatibility data into the local cache.
 
-Refresh is never automatic — the cache is only updated when you ask. All 21 product
+Refresh is never automatic — the cache is only updated when you ask. All 28 product
 pairs are probed, including the seven upstream does not publish, so coverage gaps are
 recorded rather than inferred from missing data.
 

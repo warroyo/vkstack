@@ -1,13 +1,15 @@
-# How vCenter, ESX, NSX, Avi, Supervisor, VKS and VKr fit together
+# How vCenter, ESX, NSX, Avi, Supervisor, VKS, VKr and TMC-SM fit together
 
 The Broadcom interoperability matrix answers one question at a time:
 "is A compatible with B". This is the shape of the whole dependency,
 which is the part that usually has to be drawn on a whiteboard.
 
-Five of these are in every stack. **NSX and Avi are optional and
+Five of these are in every stack. **NSX, Avi and TMC-SM are optional and
 independent**: a Supervisor runs on NSX networking, or on a vSphere
-Distributed Switch with Avi in front of it, or on neither. Opt into each
-on its own — asking for one never brings in the other.
+Distributed Switch with Avi in front of it, or on neither; TMC Self-Managed
+is installed on top of the guest-cluster layer where a self-hosted management
+plane is wanted. Opt into each on its own — asking for one never brings in
+another.
 
 ```mermaid
 flowchart TD
@@ -18,6 +20,7 @@ flowchart TD
     SUPERVISOR["<b>Supervisor</b><br/><code>v1.32.9+vmware.2-fips-vsc9.1.0.0200</code><br/>two trains: vsc9 · vsc0"]
     VKS["<b>VKS</b><br/><code>3.7.0+v1.36</code>"]
     VKR["<b>VKr</b><br/><code>1.36.1</code>"]
+    TMC["<b>TMC-SM</b><br/><code>1.4.5</code><br/><i>optional</i>"]
 
     VCENTER <-->|"version pairing"| ESX
     VCENTER -->|"manages / delivers"| SUPERVISOR
@@ -34,13 +37,16 @@ flowchart TD
     NSX -->|"segments"| AVI
     AVI -->|"load balancer"| SUPERVISOR
     ESX -.->|"published directly"| AVI
+    VCENTER -->|"management plane"| TMC
+    VKS -->|"manages"| TMC
+    VKR -->|"runs on"| TMC
 
     classDef base fill:#e8f0fe,stroke:#4a6fa5,stroke-width:3px,color:#12263f
     classDef k8s fill:#eaf6ec,stroke:#4a8a5c,stroke-width:3px,color:#12331c
     classDef optional fill:#fdf4e7,stroke:#a5784a,stroke-width:3px,stroke-dasharray:5 4,color:#3f2c12
     class VCENTER,ESX base
     class SUPERVISOR,VKS,VKR k8s
-    class NSX,AVI optional
+    class NSX,AVI,TMC optional
 ```
 
 ## What each relationship means
@@ -60,10 +66,13 @@ flowchart TD
 - **NSX → Avi** *(published in the matrix)* — Where NSX and Avi are deployed together the Avi service engines attach to NSX segments, and the two versions are paired. This constrains a stack only when both are chosen: Avi on a vSphere Distributed Switch with no NSX anywhere is an ordinary deployment, and Avi never requires NSX.
 - **Avi → Supervisor** *(published in the matrix)* — A Supervisor on VDS networking needs an external load balancer, and Avi is the supported choice. The pair is published, so where Avi is deployed it gates which Supervisor versions can be enabled. A Supervisor on NSX uses NSX load balancing instead and has no Avi in the picture.
 - **ESX → Avi** *(published in the matrix)* — Upstream publishes an ESX-to-Avi pair, but it is almost entirely empty: at the time of writing three cells in the whole grid say yes, all of them Avi 32.1.1 against ESX 9.1.x. Enforcing it would collapse every Avi-bearing stack to that one combination and rule out deployments that plainly work. Avi service engines are placed through vCenter, so vCenter is the pair that decides. This one is looked up and reported, never used to include or exclude.
+- **vCenter → TMC-SM** *(published in the matrix)* — TMC Self-Managed is optional — it is installed only where a self-hosted management plane is wanted — but where it is deployed it drives vCenter to place and manage the clusters it governs, and that pairing is versioned. Upstream publishes this pair directly, so it is enforced when TMC is in the stack.
+- **VKS → TMC-SM** *(published in the matrix)* — TMC Self-Managed is installed on a guest cluster VKS provisions and manages the fleet from there, so the VKS version it runs against is paired with it. Upstream publishes this pair directly.
+- **VKr → TMC-SM** *(published in the matrix)* — TMC Self-Managed runs on a specific VKr Kubernetes release, and the guest cluster's Kubernetes version bounds which TMC versions can be installed. Upstream publishes this pair directly.
 
 ## Which pairs decide a stack
 
-Ten of the fifteen relationships above are dependencies, and those alone decide whether a stack is valid: vCenter × ESX, vCenter × Supervisor, ESX × Supervisor, Supervisor × VKS, VKS × VKr, vCenter × NSX, NSX × Supervisor, vCenter × Avi, NSX × Avi and Avi × Supervisor.
+Thirteen of the 18 relationships above are dependencies, and those alone decide whether a stack is valid: vCenter × ESX, vCenter × Supervisor, ESX × Supervisor, Supervisor × VKS, VKS × VKr, vCenter × NSX, NSX × Supervisor, vCenter × Avi, NSX × Avi, Avi × Supervisor, vCenter × TMC-SM, VKS × TMC-SM and VKr × TMC-SM.
 
 The other five are looked up but never allowed to decide a stack: **vCenter × VKS**, **vCenter × VKr**, **Supervisor × VKr**, **ESX × NSX** and **ESX × Avi**. The reason differs by pair and is given with each relationship above. Some are not dependencies at all — VKr is provisioned by VKS, so a direct vCenter verdict on it decides nothing. Others are real dependencies that still constrain nothing in practice: NSX does prepare the ESX hosts as transport nodes, but that grid is nearly as permissive as the vCenter one and the two move together, so enforcing it rules out nothing the vCenter pair has not already ruled out. ESX × Avi is the opposite shape — almost every cell is empty, so enforcing it would collapse every Avi-bearing stack rather than narrow it.
 
@@ -103,6 +112,14 @@ The interoperability matrix returns nothing at all for ESX against VKr — not a
 
 *What to do:* Constrain through vCenter and Supervisor instead, which are published.
 
+### ESX × TMC-SM is not published
+
+The interoperability matrix returns nothing at all for ESX against TMC-SM — not an empty result, but no data. Nobody has stated whether these two work together.
+
+*What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
+
+*What to do:* Constrain through vCenter and Supervisor instead, which are published.
+
 ### NSX × VKS is not published
 
 The interoperability matrix returns nothing at all for NSX against VKS — not an empty result, but no data. Nobody has stated whether these two work together.
@@ -114,6 +131,14 @@ The interoperability matrix returns nothing at all for NSX against VKS — not a
 ### NSX × VKr is not published
 
 The interoperability matrix returns nothing at all for NSX against VKr — not an empty result, but no data. Nobody has stated whether these two work together.
+
+*What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
+
+*What to do:* Constrain through vCenter and Supervisor instead, which are published.
+
+### NSX × TMC-SM is not published
+
+The interoperability matrix returns nothing at all for NSX against TMC-SM — not an empty result, but no data. Nobody has stated whether these two work together.
 
 *What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
 
@@ -135,6 +160,14 @@ The interoperability matrix returns nothing at all for Avi against VKr — not a
 
 *What to do:* Constrain through vCenter and Supervisor instead, which are published.
 
+### Avi × TMC-SM is not published
+
+The interoperability matrix returns nothing at all for Avi against TMC-SM — not an empty result, but no data. Nobody has stated whether these two work together.
+
+*What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
+
+*What to do:* Constrain through vCenter and Supervisor instead, which are published.
+
 ### Supervisor × VKr is not published
 
 The interoperability matrix returns nothing at all for Supervisor against VKr — not an empty result, but no data. Nobody has stated whether these two work together.
@@ -142,6 +175,14 @@ The interoperability matrix returns nothing at all for Supervisor against VKr �
 *What it means:* This is the gap that matters. It is a question people genuinely ask, and there is no direct answer to look up.
 
 *What to do:* This tool answers it indirectly: VKS sits between them and is published against both, and vCenter is published against both, so a combination that satisfies those is reported — always labelled inferred, never as verified compatible.
+
+### Supervisor × TMC-SM is not published
+
+The interoperability matrix returns nothing at all for Supervisor against TMC-SM — not an empty result, but no data. Nobody has stated whether these two work together.
+
+*What it means:* In practice this costs nothing: it is not a combination anyone configures directly.
+
+*What to do:* Constrain through vCenter and Supervisor instead, which are published.
 
 ### Which optional components a deployment actually has
 
@@ -193,7 +234,7 @@ vCenter and ESX below 8.0 U3 are filtered out, and Supervisor, VKS and VKr are d
 
 ## Upgrade order
 
-vCenter → ESX → NSX → Avi → Supervisor → VKS → VKr
+vCenter → ESX → NSX → Avi → Supervisor → VKS → VKr → TMC-SM
 
 vCenter moves first because it must be at or ahead of the hosts and the
 Supervisor it manages; the guest clusters move last. This ordering is

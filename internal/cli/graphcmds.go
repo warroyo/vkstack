@@ -399,7 +399,7 @@ func newCheckCmd() *cobra.Command {
 		Long: `Validate every pair of a pinned stack.
 
 Exits non-zero if any pair is actively incompatible. Pairs that upstream does not
-publish are reported as unverified and do not fail the check — seven of the 21 pairs
+publish are reported as unverified and do not fail the check — eleven of the 28 pairs
 have no data by design.`,
 		Args: cobra.NoArgs,
 	}
@@ -503,13 +503,14 @@ is compatible on every published pair:
   vkstack stack vcenter 8.0U3k
   vkstack stack --vcenter 8.0U3k --vks 3.6.2
 
-NSX and Avi are optional and independent. Neither is in a stack unless you pin it or ask
-for it, and asking for one never brings in the other:
+NSX, Avi and TMC Self-Managed are optional and independent. None is in a stack unless you
+pin it or ask for it, and asking for one never brings in another:
 
   vkstack stack vcenter 9.1.0.0300 --with nsx        # NSX, no Avi
   vkstack stack vcenter 9.1.0.0300 --with avi        # Avi on VDS, no NSX
   vkstack stack vcenter 9.1.0.0300 --with nsx,avi    # both
   vkstack stack --avi 32.1.2                         # a pin is its own opt-in
+  vkstack stack vcenter 9.1.0.0300 --with tmc        # TMC Self-Managed on top
 
 Pairs upstream does not publish cannot constrain the answer; they are reported at the
 bottom so you know which parts of the stack are verified and which are inferred.`,

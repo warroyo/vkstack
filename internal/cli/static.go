@@ -22,8 +22,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -272,7 +274,14 @@ func generateGeneration(handler http.Handler, bundles map[bundleKey]*siteData, g
 		return err
 	}
 
+	// put records one node's answer. Guarded because the workers below write different
+	// slots of these maps concurrently and Go maps are not safe for concurrent writes. The
+	// lock covers only the insert, never the solve that produced body, so the expensive
+	// work still runs fully in parallel.
+	var mu sync.Mutex
 	put := func(product, version, with string, body json.RawMessage) {
+		mu.Lock()
+		defer mu.Unlock()
 		maps := bundles[bundleKey{With: with, Gen: gen}].StackMaps
 		if maps[product] == nil {
 			maps[product] = map[string]json.RawMessage{}
@@ -323,6 +332,14 @@ func generateGeneration(handler http.Handler, bundles map[bundleKey]*siteData, g
 		return fmt.Errorf("reading the unpinned map for generation %d: %w", gen, err)
 	}
 
+	// One work item per clickable (layer, version). The list is deduped up front — a
+	// grouped node's default pin also appears in its Releases, and two nodes can share a
+	// release — so the workers below share no bookkeeping and the result never depends on
+	// which one finished first. This replaces the old inline "already in base.StackMaps"
+	// check, which was a running dedup only a sequential loop could rely on.
+	type work struct{ product, version string }
+	var items []work
+	seen := map[work]bool{}
 	for _, layer := range layout.Layers {
 		for _, node := range layer.Nodes {
 			// Mirrors the client's pinVersionFor: an explicit pin when the server sent
@@ -340,17 +357,60 @@ func generateGeneration(handler http.Handler, bundles map[bundleKey]*siteData, g
 				versions = []string{version}
 			}
 			for _, v := range versions {
-				if _, seen := base.StackMaps[layer.Key][v]; seen {
+				it := work{layer.Key, v}
+				if seen[it] {
 					continue
 				}
-				if err := answer(layer.Key, v,
-					url.Values{"product": {layer.Key}, "version": {v}}); err != nil {
-					return err
-				}
+				seen[it] = true
+				items = append(items, it)
 			}
 		}
 	}
-	return nil
+
+	// Answer them across GOMAXPROCS workers. Each item is independent read-only work
+	// against an immutable graph — the solve touches no shared state and the loader hands
+	// out one cached graph per generation — so the only synchronisation needed is the lock
+	// inside put. A parallel run and a sequential one produce byte-identical bundles,
+	// because json.Marshal sorts map keys and every item writes only its own slot.
+	workers := runtime.GOMAXPROCS(0)
+	if workers > len(items) {
+		workers = len(items)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	ch := make(chan work)
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var firstErr error
+	stop := make(chan struct{}) // closed on the first error, to drain the feed promptly
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for it := range ch {
+				if err := answer(it.product, it.version,
+					url.Values{"product": {it.product}, "version": {it.version}}); err != nil {
+					errOnce.Do(func() { firstErr = err; close(stop) })
+					return
+				}
+			}
+		}()
+	}
+
+feed:
+	for _, it := range items {
+		select {
+		case ch <- it:
+		case <-stop:
+			break feed
+		}
+	}
+	close(ch)
+	wg.Wait()
+	return firstErr
 }
 
 // writeSite copies the UI onto disk next to the generated bundles.

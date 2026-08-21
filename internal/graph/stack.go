@@ -273,9 +273,17 @@ func (g *Graph) consistent(r *Release, assigned map[int]*Release) bool {
 // blockingProduct names an assigned product that rules out every candidate, for the
 // failure message. Best-effort: it reports the first assigned product that rejects
 // everything.
+//
+// It walks the assigned products in stack order rather than ranging the map directly,
+// because more than one can block at once — TMC against both the selected VKS and VKr, say
+// — and a bare map range would name whichever Go's randomised iteration reached first, so
+// the same dead end got a different reason from one run to the next. That is invisible over
+// HTTP but makes a static build unreproducible: the bytes change with nothing behind them.
+// Stack order also reads better, naming the lowest blocking layer first.
 func (g *Graph) blockingProduct(productID int, assigned map[int]*Release) model.Product {
-	for otherID, other := range assigned {
-		if !model.Constrains(productID, otherID) || !g.Published(productID, otherID) {
+	for _, p := range model.Products {
+		other, ok := assigned[p.ID]
+		if !ok || !model.Constrains(productID, p.ID) || !g.Published(productID, p.ID) {
 			continue
 		}
 		anyOK := false
@@ -286,7 +294,6 @@ func (g *Graph) blockingProduct(productID int, assigned map[int]*Release) model.
 			}
 		}
 		if !anyOK {
-			p, _ := model.ByID(otherID)
 			return p
 		}
 	}

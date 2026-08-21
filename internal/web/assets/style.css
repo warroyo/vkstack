@@ -59,8 +59,13 @@
   --page-content: calc(var(--page-max) - 3rem);
 }
 
+/* The palette follows the OS by default, but an explicit choice from the header toggle
+   wins over it: data-theme="light" opts back out of an OS that is dark, and the
+   data-theme="dark" block far below opts into dark on an OS that is light. Some embedded
+   webviews (IDE preview panes, side panels) report light regardless of the real OS and
+   swallow the native right-click menu too — the toggle is the way out of that. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --surface: #10141b;
     --panel: #171d26;
     --ink: #e6eaf1;
@@ -86,6 +91,33 @@
 
 @media (prefers-reduced-motion: reduce) {
   :root { --step: 0ms; }
+}
+
+/* Explicit dark, chosen from the header toggle, for when the OS (or a lying webview) is
+   light. These values must stay identical to the prefers-color-scheme block above; it sits
+   after every @media on purpose so internal/web/contrast_test.go, which reads the tokens
+   between the dark media query and the next @media, keeps testing a single copy. */
+:root[data-theme="dark"] {
+  --surface: #10141b;
+  --panel: #171d26;
+  --ink: #e6eaf1;
+  --muted: #aab5c4;
+  --faint: #8f9cb0;
+  --hair: #2a3441;
+  --edge: #5f6d7f;
+
+  --signal: #7d92ff;
+  --signal-soft: #1d2544;
+  --pick: #3ecf96;
+  --pick-soft: #102c22;
+  --warn: #f0906a;
+  --tg: #dda94a;
+  --tg-soft: #33290f;
+  --eos: #e8848a;
+  --eos-soft: #331a1c;
+
+  --on-accent: #10141b;
+  --shadow: 0, 0, 0;
 }
 
 * { box-sizing: border-box; }
@@ -168,17 +200,42 @@ body {
 #tabs button:hover { color: var(--ink); }
 #tabs button.active { color: var(--ink); border-bottom-color: var(--signal); }
 
-/* Pushed to the end of the masthead row: the way out of the page belongs at its edge,
-   not in the reading order of the tabs. */
-.gh-link {
+/* The theme toggle and the link out both belong at the row's edge, not in the reading
+   order of the tabs. The toggle carries the margin that pushes the whole cluster right;
+   the link sits beside it on the row's own gap. */
+.theme-toggle {
   margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  display: inline-flex;
+  align-self: center;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.gh-link {
   display: inline-flex;
   align-self: center;
   color: var(--faint);
 }
 
+.theme-toggle:hover,
 .gh-link:hover { color: var(--ink); }
+.theme-toggle:focus-visible,
 .gh-link:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
+
+/* Only the icon for the active theme shows; the other is folded away. The root carries no
+   data-theme in auto mode, so the fallback is the moon (offer dark) unless the OS is dark. */
+.theme-toggle .icon-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-toggle .icon-dark { display: inline-flex; }
+  :root:not([data-theme="light"]) .theme-toggle .icon-light { display: none; }
+}
+:root[data-theme="dark"] .theme-toggle .icon-dark { display: inline-flex; }
+:root[data-theme="dark"] .theme-toggle .icon-light { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-dark { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-light { display: inline-flex; }
 
 /* Centred, not left-pinned. The cap has been here since the map landed but nothing ever
    centred it, so every window wider than the column left a growing empty margin down the
@@ -557,7 +614,7 @@ button.ghost.inline { margin-left: 0.6rem; }
 
 /* Printing is the cheapest export there is: a change board wants a page, not a browser. */
 @media print {
-  .masthead nav, .gh-link, .stack-actions, .manifest-actions, .legend,
+  .masthead nav, .gh-link, .theme-toggle, .stack-actions, .manifest-actions, .legend,
   #strata, #peek, #view-usage, .refresh-log, .map-controls,
   .section-head .filter { display: none !important; }
   /* Printing is for the record, so it prints the record whichever tab is open. */

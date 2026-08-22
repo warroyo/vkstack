@@ -33,15 +33,25 @@ PRODUCT_ID = {  # model product key -> upstream interop product id
 }
 STATUS = {1: "compatible", 2: "incompatible", 3: "compatible-not-tested", 4: "not-supported"}
 
+# Broadcom's WAF 403s the default urllib UA ("Python-urllib/3.x"); pretend to be a browser.
+UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
+
+def _get(url, timeout):
+    return urllib.request.urlopen(
+        urllib.request.Request(url, headers={"User-Agent": UA}), timeout=timeout
+    ).read().decode("utf-8", "ignore")
+
 
 def discover():
     kf, sf = "/tmp/vk_key", "/tmp/vk_svc"
     if os.path.exists(kf) and os.path.exists(sf) and os.path.getsize(kf):
         return open(kf).read().strip(), open(sf).read().strip()
-    page = urllib.request.urlopen("https://interopmatrix.broadcom.com/Interoperability", timeout=30).read().decode("utf-8", "ignore")
+    page = _get("https://interopmatrix.broadcom.com/Interoperability", 30)
     import re
     bundle = re.search(r"main\.[0-9a-f]+\.js", page).group(0)
-    js = urllib.request.urlopen(f"https://interopmatrix.broadcom.com/{bundle}", timeout=60).read().decode("utf-8", "ignore")
+    js = _get(f"https://interopmatrix.broadcom.com/{bundle}", 60)
     key = re.search(r'"X-Auth-Key":"([^"]+)"', js).group(1)
     svc = re.search(r'simServiceUrl:"(https://interop\.esp\.[^"]+)"', js).group(1)
     open(kf, "w").write(key); open(sf, "w").write(svc)
@@ -58,7 +68,8 @@ def matrix(svc, key, col_product, row_product):
     }).encode()
     req = urllib.request.Request(svc + "/products/interoperabilityMatrix", data=body,
                                  headers={"X-Auth-Key": key, "Accept": "application/json",
-                                          "Content-Type": "application/json"}, method="POST")
+                                          "Content-Type": "application/json", "User-Agent": UA},
+                                 method="POST")
     d = json.load(urllib.request.urlopen(req, timeout=120))
     cells = {}  # (col_version, row_version) -> status
     for cols in d.values():

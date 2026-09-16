@@ -130,8 +130,10 @@ commands whose answer really is rows (`releases`, `compat`, `products`), or
 
 ## The stack map
 
-`vkstack serve` opens on a layered map of the whole stack, drawn bottom-up: vCenter at
-the base, branching up through Supervisor, VKS and VKr. Pick any version at any layer and
+`vkstack serve` opens on a layered map of the whole stack, drawn bottom-up: ESX and
+vCenter at the base, branching up through Supervisor, VKS and VKr. The rows say what
+rests on what, so the hosts are the bottom one — the upgrade order, where vCenter moves
+first, is the other question and is answered in the pin controls. Pick any version at any layer and
 the map redraws around it, with a list underneath showing every version in every layer,
 lit or faded.
 
@@ -176,7 +178,7 @@ having tested it, and a dotted one means it published no result for that pair an
 link is inferred from the rest of the stack. Upstream footnotes on a result, such as
 "Running Supervisor is compatible after VC upgrade", are shown rather than dropped.
 
-Four things are grouped deliberately.
+Four choices about the rows and nodes are deliberate.
 
 - Supervisor is split by release train. The same Kubernetes version ships on two
   trains that are *not* interchangeable: `vsc9.x` ships with vCenter 9.x, `vsc0.x` is
@@ -186,9 +188,12 @@ Four things are grouped deliberately.
   a rule of ours: vCenter 9.1.0.0300 accepts both.
 - vCenter is not collapsed by patch. 8.0U3 supports Supervisor 1.26 to 1.28 while 8.0U3k
   supports 1.31 to 1.33, so hiding the patch letter would throw away the answer.
-- ESX is not a layer. Its release lines are identical to vCenter's and it has no
-  published data against VKS or VKr, so it appears as "on ESX 9.1 · 9.0 · 8.0U3" under
-  each vCenter node instead of a row nobody can branch from.
+- ESX is a row of its own, folded until you open it. Upstream publishes ESX against the
+  Supervisor, NSX and Avi, and ESX × Supervisor is one of the pairs the solver enforces,
+  so the host build is a real choice — it is just one most people never make, since ESX
+  moves with vCenter. Open the row and every host is clickable like any other node;
+  leave it folded and the stack still solves with ESX in it. Unlike NSX and Avi, folding
+  it is display state only: it never changes the answer.
 - NSX and Avi are grouped by major.minor line, since neither carries a Kubernetes
   version to group on: NSX `9.1` covers 9.1.0.0 through 9.1.0.0200, Avi `32.1` covers
   32.1.1 and 32.1.2. TMC-SM is *not* grouped — like vCenter, its compatibility is

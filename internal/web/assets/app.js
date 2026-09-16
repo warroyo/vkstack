@@ -24,6 +24,14 @@ const state = {
   // and Avi in front of a distributed switch with no NSX anywhere is an ordinary
   // deployment. Nothing here may ever open one because the other is open.
   include: [],
+  // Folded layers the reader has opened that are not optional. ESX is the only one: it is
+  // in every stack and the solver always constrains it, but its version follows vCenter,
+  // so the row starts folded and opening it is display state alone.
+  //
+  // Kept apart from `include` on purpose. `include` is a question for the solver and a
+  // cache key on a static build; this never leaves the browser, so opening ESX re-renders
+  // rather than re-solving.
+  shown: [],
   // The vSphere platform generation on show, as a vCenter major version. 0 is every
   // generation. Unlike hideLegacy and filter below it, this is not a view filter: it is a
   // load-time one, so changing it re-asks the server.
@@ -36,14 +44,27 @@ const state = {
   generations: [],    // the generations the server offers, for the tabs
 };
 
-const isOpen = (layer) => !layer.optional || state.include.includes(layer.key);
+const isOpen = (layer) =>
+  layer.optional ? state.include.includes(layer.key)
+  : layer.collapsed ? state.shown.includes(layer.key)
+  : true;
 
-// openLayer opens one optional layer, leaving every other layer as it was.
-function openLayer(key) {
-  if (state.include.includes(key)) return false;
-  state.include = [...state.include, key];
-  return true;
+// openLayer opens one folded layer, leaving every other layer as it was. Returns whether
+// anything changed, and whether the change needs a new answer from the server.
+function openLayer(layer) {
+  if (isOpen(layer)) return { opened: false, resolve: false };
+  if (layer.optional) {
+    state.include = [...state.include, layer.key];
+    return { opened: true, resolve: true };
+  }
+  state.shown = [...state.shown, layer.key];
+  return { opened: true, resolve: false };
 }
+
+// SHOWN_ORDER canonicalises the `show` parameter, the way OPTIONAL_ORDER does for `with`.
+const SHOWN_ORDER = ["esx"];
+const showParam = () =>
+  SHOWN_ORDER.filter((k) => state.shown.includes(k)).join(",");
 
 // OPTIONAL_ORDER canonicalises the `with` parameter.
 //
@@ -214,10 +235,17 @@ async function loadStack() {
   // response in hand was solved for a map that did not include this row: it lit no nodes
   // in it and drew no edges to the pinned node. Rendering that put the reader's own
   // selection on screen connected to nothing.
+  //
+  // A folded-but-not-optional row (ESX) needs opening too, but not re-solving: the answer
+  // in hand already lit it and already carries its edges, because the solver never stopped
+  // constraining ESX.
   const pinnedLayer = state.layers.find((l) => l.key === state.pin?.product);
-  if (pinnedLayer?.optional && openLayer(pinnedLayer.key)) {
-    syncURL(false);
-    return loadStack();
+  if (pinnedLayer && !isOpen(pinnedLayer)) {
+    const { opened, resolve } = openLayer(pinnedLayer);
+    if (opened) {
+      syncURL(false);
+      if (resolve) return loadStack();
+    }
   }
 
   state.lit = data.lit ? new Set(data.lit) : null;
@@ -480,7 +508,7 @@ function renderMap() {
     return;
   }
 
-  // Bottom-up: layers[0] is vCenter, and row 0 sits at the bottom of the drawing.
+  // Bottom-up: layers[0] is ESX, and row 0 sits at the bottom of the drawing.
   // The pinned node is always drawn: hiding your own selection because the legacy
   // filter came on afterwards leaves a map that answers a question nobody asked.
   //
@@ -941,8 +969,10 @@ function renderStrata() {
           el("span", { class: "narrowed" }, String(litCount)), ` of ${total}`)
       : el("div", { class: "layer-count" }, `${total}`);
 
-    // A closed optional layer collapses to one row saying when it applies. Each has its
-    // own toggle and its own state — opening NSX must never open Avi.
+    // A closed row collapses to one line saying when it applies. Each has its own toggle
+    // and its own state — opening NSX must never open Avi. ESX reads the same way, with
+    // wording that does not pretend it is optional: it is in the stack either way, the
+    // row only says whether you are choosing the build yourself.
     if (!isOpen(layer)) {
       root.append(
         el("div", { class: "layer is-optional is-closed" },
@@ -955,7 +985,7 @@ function renderStrata() {
               type: "button",
               "aria-expanded": "false",
               onclick: () => toggleLayer(layer.key),
-            }, `Add ${layer.label}`),
+            }, layer.optional ? `Add ${layer.label}` : `Show ${layer.label}`),
             layer.note ? el("span", { class: "layer-note" }, layer.note) : null)));
       continue;
     }
@@ -977,17 +1007,17 @@ function renderStrata() {
       nodes.append(el("span", { class: "hidden-count" }, `${filtered} filtered out`));
     }
 
-    if (layer.optional) {
+    if (layer.optional || layer.collapsed) {
       nodes.append(el("button", {
         class: "ghost inline layer-toggle",
         type: "button",
         "aria-expanded": "true",
         onclick: () => toggleLayer(layer.key),
-      }, `Remove ${layer.label}`));
+      }, layer.optional ? `Remove ${layer.label}` : `Hide ${layer.label}`));
     }
 
     root.append(
-      el("div", { class: layer.optional ? "layer is-optional" : "layer" },
+      el("div", { class: layer.optional || layer.collapsed ? "layer is-optional" : "layer" },
         el("div", { class: "layer-spine" },
           el("div", { class: "layer-name" }, layer.label), count),
         nodes));
@@ -1064,23 +1094,43 @@ function renderCaveats() {
   box.append(el("h2", { class: "section-label" }, "Caveats on the versions above"), ...rows);
 }
 
-// toggleLayer opens or closes one optional layer.
+// toggleLayer opens or closes one folded layer.
 //
 // Closing a layer drops any pin that lived in it — leaving a pin on a hidden layer would
 // mean the map is solving for something the reader cannot see. Nothing else is touched:
-// the other optional layer keeps whatever state it had.
+// every other folded layer keeps whatever state it had.
+//
+// An optional layer changes the question, so it re-solves. A collapsed one (ESX) does not:
+// the solver constrained it all along, so showing the row is a render.
 function toggleLayer(key) {
-  const wasOpen = state.include.includes(key);
-  state.include = wasOpen
-    ? state.include.filter((k) => k !== key)
-    : [...state.include, key];
+  const layer = state.layers.find((l) => l.key === key);
+  const optional = !!layer?.optional;
+  const wasOpen = optional
+    ? state.include.includes(key)
+    : state.shown.includes(key);
+
+  if (optional) {
+    state.include = wasOpen
+      ? state.include.filter((k) => k !== key)
+      : [...state.include, key];
+  } else {
+    state.shown = wasOpen
+      ? state.shown.filter((k) => k !== key)
+      : [...state.shown, key];
+  }
 
   if (wasOpen && state.pin?.product === key) {
     setPin(null);
     return;
   }
   syncURL(true);
-  loadStack();
+  if (optional) {
+    loadStack();
+    return;
+  }
+  renderMap();
+  syncRailHeight();
+  renderStrata();
 }
 
 // strataKeys moves focus between versions with the arrow keys.
@@ -1324,6 +1374,9 @@ function currentURL() {
   // Which optional layers are open travels with the link, so a URL shared as "here is
   // the Avi-only view" comes back as the Avi-only view.
   if (withParam()) params.set("with", withParam());
+  // The ESX row is display state, not a question for the solver, but a link that says
+  // "here is the host row open" has to come back with it open.
+  if (showParam()) params.set("show", showParam());
   // The generation travels with the link too: "here is the vSphere 9 view" has to come
   // back as the vSphere 9 view, not as every generation with a 9 pinned.
   if (genParam()) params.set("gen", genParam());
@@ -1346,7 +1399,7 @@ function syncURL(push) {
 function readState() {
   return {
     pin: state.pin, hideLegacy: state.hideLegacy, view: state.view,
-    include: state.include, generation: state.generation,
+    include: state.include, shown: state.shown, generation: state.generation,
   };
 }
 
@@ -1366,6 +1419,9 @@ function applyURL() {
   const asked = (params.get("with") || "")
     .split(",").map((k) => k.trim().toLowerCase()).filter(Boolean);
   state.include = OPTIONAL_ORDER.filter((k) => asked.includes(k));
+  const toShow = (params.get("show") || "")
+    .split(",").map((k) => k.trim().toLowerCase()).filter(Boolean);
+  state.shown = SHOWN_ORDER.filter((k) => toShow.includes(k));
   // Same treatment for the generation: a value the build does not offer widens to All
   // rather than erroring, so an old link still shows a map. state.generations is empty
   // until meta lands, so the first read trusts the number and renderGenerations corrects
@@ -1375,7 +1431,8 @@ function applyURL() {
   // suppressed both the saved stack and the default vCenter pin, so `?with=` on its own
   // opened the app on a blank map.
   return params.has("product") || params.has("legacy") ||
-         params.has("view") || state.include.length > 0 || state.generation !== 0;
+         params.has("view") || state.include.length > 0 ||
+         state.shown.length > 0 || state.generation !== 0;
 }
 
 // readGeneration parses the `gen` parameter, falling back to every generation.
@@ -1856,11 +1913,6 @@ function peekParts(layer, node) {
   // gets cut when it is long. Putting provenance after the list buried the one part a
   // reader cannot reconstruct for themselves.
   const head = [];
-  if (layer.key === "vcenter" && node.hosts?.length) {
-    head.push(`Runs on ESX: ${node.hosts.join(", ")}`);
-  } else if (layer.key === "vcenter" && state.lit?.has(node.id)) {
-    head.push("No ESX release can carry this vCenter and the current selection.");
-  }
   if (node.train) {
     head.push(node.train === "vsc9"
       ? "Train vsc9 — these versions ship with vCenter 9.x"

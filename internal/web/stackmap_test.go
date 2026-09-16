@@ -1,7 +1,7 @@
 package web
 
 import (
-	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -343,34 +343,77 @@ func TestNodePhaseNamesItsWorstReleaseToo(t *testing.T) {
 	}
 }
 
-// ESX gates the Supervisor as much as vCenter does, so the hosts named on a vCenter node
-// have to be hosts for the whole selection. Listing every ESX release the vCenter pairs
-// with overstated the answer: it offered hosts that cannot carry the Supervisor on screen.
-func TestHostsNarrowThroughThePin(t *testing.T) {
-	g := testGraph(t)
-	vcRel, err := g.Resolve("vcenter", "8.0U3")
-	if err != nil {
-		t.Fatalf("resolving vCenter: %v", err)
+// ESX gates the Supervisor as much as vCenter does, so its own row has to narrow through
+// the pin. ESX used to be an annotation on the vCenter node, and the annotation listed
+// every host the vCenter paired with — hosts that cannot carry the Supervisor on screen.
+func TestESXLayerNarrowsThroughThePin(t *testing.T) {
+	h := serverForGraph(t, testGraph(t))
+
+	lit := litSet(t, get(t, h, "/api/stackmap?product=vcenter&version=8.0U3"))
+	if !lit["esx:8.0U3"] {
+		t.Fatalf("8.0U3 carries this vCenter and its Supervisor, so it must be lit: %v", keysOfSet(lit))
 	}
-	supRel, err := g.Resolve("supervisor", "v1.33.0+vmware.1-fips-vsc9.0.0.0100")
-	if err != nil {
-		t.Fatalf("resolving Supervisor: %v", err)
+	// The vCenter accepts 8.0U3a and no Supervisor is published against it. The old
+	// annotation on the vCenter node listed it anyway, because it asked the pairwise
+	// question; the row asks whether a whole stack exists.
+	if lit["esx:8.0U3a"] {
+		t.Errorf("8.0U3a reaches no Supervisor, so it must not be lit: %v", keysOfSet(lit))
 	}
 
-	probe := graph.StackOptions{Limit: 1, HidePatches: false}
-	unpinned := rawsOf(hostsWithPin(g, nil, []*graph.Release{vcRel}, probe))
-	if !slices.Contains(unpinned, "8.0U3a") {
-		t.Fatalf("without a pin the pairwise hosts stand, got %v", unpinned)
+	lit = litSet(t, get(t, h, "/api/stackmap?product=vcenter&version=9.0.0.0"))
+	if !lit["esx:9.0.0.0"] {
+		t.Errorf("expected the 9.0.0.0 host to be lit for the 9.0.0.0 vCenter: %v", keysOfSet(lit))
 	}
+	if lit["esx:8.0U3"] {
+		t.Errorf("the 8.0U3 host cannot carry a 9.0.0.0 vCenter: %v", keysOfSet(lit))
+	}
+}
 
-	pinned := rawsOf(hostsWithPin(g,
-		map[int]*graph.Release{supRel.ProductID: supRel}, []*graph.Release{vcRel}, probe))
-	if slices.Contains(pinned, "8.0U3a") {
-		t.Errorf("8.0U3a cannot carry the pinned Supervisor but is still listed: %v", pinned)
+// ESX is in every stack, so it is not Optional — but it follows vCenter, so the row is
+// folded until a reader asks for it. The distinction is the whole point: Optional reaches
+// the solver through `with`, Collapsed never leaves the client.
+func TestESXLayerIsCollapsedButNotOptional(t *testing.T) {
+	body := get(t, serverForGraph(t, testGraph(t)), "/api/stackmap")
+	for _, raw := range body["layers"].([]any) {
+		layer := raw.(map[string]any)
+		if layer["key"] != "esx" {
+			continue
+		}
+		if collapsed, _ := layer["collapsed"].(bool); !collapsed {
+			t.Error("the ESX row has to come back collapsed")
+		}
+		if optional, _ := layer["optional"].(bool); optional {
+			t.Error("ESX is in every stack, so it must not be marked optional")
+		}
+		if note, _ := layer["note"].(string); note == "" {
+			t.Error("a folded row needs a note saying when it applies")
+		}
+		return
 	}
-	if !slices.Contains(pinned, "8.0U3") {
-		t.Errorf("expected 8.0U3 to survive the pin, got %v", pinned)
+	t.Fatal("no ESX layer in the map")
+}
+
+// litSet reads the lit node ids out of a stack-map response.
+func litSet(t *testing.T, body map[string]any) map[string]bool {
+	t.Helper()
+	raw, ok := body["lit"].([]any)
+	if !ok {
+		t.Fatalf("expected a lit set, got %v", body["lit"])
 	}
+	out := map[string]bool{}
+	for _, v := range raw {
+		out[v.(string)] = true
+	}
+	return out
+}
+
+func keysOfSet(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // The map used to draw an identical empty frame for "nothing selected" and "this

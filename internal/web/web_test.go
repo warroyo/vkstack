@@ -415,10 +415,11 @@ func TestHealthReflectsCacheState(t *testing.T) {
 	}
 }
 
-// The stack map is the main view. Its layers must run bottom-up, vCenter must not be
-// collapsed by patch (the patch letter changes what a release supports), and ESX must
-// not be a layer at all. NSX and Avi sit between the hypervisor and the Supervisor and
-// are flagged optional, which is what keeps them collapsed on screen.
+// The stack map is the main view. Its layers must run bottom-up, and vCenter must not be
+// collapsed by patch (the patch letter changes what a release supports). ESX is the
+// bottom row — everything runs on the hosts, whatever the upgrade order says — and NSX
+// and Avi sit between the hypervisor and the Supervisor; the optional flag on the last
+// two is what keeps them collapsed and out of the solve.
 func TestStackMapLayers(t *testing.T) {
 	body := get(t, testServer(t), "/api/stackmap")
 	layers := body["layers"].([]any)
@@ -433,9 +434,9 @@ func TestStackMapLayers(t *testing.T) {
 			optional[key] = true
 		}
 	}
-	want := []string{"vcenter", "nsx", "avi", "supervisor", "vks", "vkr"}
+	want := []string{"esx", "vcenter", "nsx", "avi", "supervisor", "vks", "vkr"}
 	if strings.Join(keys, ",") != strings.Join(want, ",") {
-		t.Errorf("layers = %v, want %v (bottom-up, no ESX layer)", keys, want)
+		t.Errorf("layers = %v, want %v (bottom-up)", keys, want)
 	}
 	if len(optional) != 2 || !optional["nsx"] || !optional["avi"] {
 		t.Errorf("optional layers = %v, want exactly nsx and avi", optional)
@@ -665,29 +666,6 @@ func keysOfMap(m map[string]any) []string {
 	return out
 }
 
-// ESX rides along on the vCenter node rather than occupying a row, so the base node has
-// to say which hosts it runs on.
-func TestStackMapAnnotatesVCenterWithHosts(t *testing.T) {
-	body := get(t, testServer(t), "/api/stackmap")
-	base := body["layers"].([]any)[0].(map[string]any)
-	nodes := base["nodes"].([]any)
-	if len(nodes) == 0 {
-		t.Fatal("expected at least one vCenter node")
-	}
-	first := nodes[0].(map[string]any)
-
-	// The visible annotation is collapsed to host lines, because a vCenter release can
-	// run nineteen host patches and listing them all is unreadable.
-	if detail, _ := first["detail"].(string); detail != "9.0" {
-		t.Errorf("expected the collapsed host line on the vCenter node, got %q", detail)
-	}
-	// The exact list stays on the node for the hover.
-	hosts, _ := first["hosts"].([]any)
-	if len(hosts) == 0 || hosts[0].(string) != "9.0.0.0" {
-		t.Errorf("expected the exact host releases to remain available, got %v", hosts)
-	}
-}
-
 // Pinning must narrow the upper layers, and "lit" has to mean a complete stack exists —
 // so the pinned node itself is always lit.
 func TestStackMapPinNarrows(t *testing.T) {
@@ -723,9 +701,6 @@ func TestStackMapPinNarrows(t *testing.T) {
 		if _, ok := model.ByKey(product); !ok {
 			t.Errorf("lit id %q names an unknown product", id)
 		}
-		if product == "esx" {
-			t.Errorf("ESX is not a layer, so %q should not be lit", id)
-		}
 	}
 }
 
@@ -752,7 +727,11 @@ func TestStackMapEdges(t *testing.T) {
 		t.Fatalf("expected edges for a pinned selection, got %v", body["edges"])
 	}
 
-	rank := map[string]int{"vcenter": 0, "supervisor": 1, "vks": 2, "vkr": 3}
+	// Every drawn connection has to be a pair the solver enforces, running up the stack.
+	// Rank rather than layer adjacency: vCenter constrains the Supervisor directly, so
+	// that edge steps over no row that matters. The ranks are the rows, not the upgrade
+	// order — ESX is the bottom row and vCenter still moves first.
+	rank := map[string]int{"esx": 0, "vcenter": 1, "supervisor": 2, "vks": 3, "vkr": 4}
 	for _, raw := range edges {
 		e := raw.(map[string]any)
 		from, to := e["from"].(string), e["to"].(string)
@@ -761,8 +740,13 @@ func TestStackMapEdges(t *testing.T) {
 		}
 		fp, _, _ := strings.Cut(from, ":")
 		tp, _, _ := strings.Cut(to, ":")
-		if rank[tp]-rank[fp] != 1 {
-			t.Errorf("edge %s -> %s is not between adjacent layers", from, to)
+		if rank[tp] <= rank[fp] {
+			t.Errorf("edge %s -> %s does not run up the stack", from, to)
+		}
+		a, aok := model.ByKey(fp)
+		b, bok := model.ByKey(tp)
+		if !aok || !bok || !model.Constrains(a.ID, b.ID) {
+			t.Errorf("edge %s -> %s is not an enforced pair", from, to)
 		}
 	}
 }

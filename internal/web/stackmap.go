@@ -24,9 +24,14 @@ import (
 // compatibility axis (8.0U3 supports Supervisor 1.26-1.28; 8.0U3k supports 1.31-1.33), so
 // collapsing those would throw away the answer.
 //
-// ESX is not a layer. Its release lines are identical to vCenter's and it has no
-// published data against VKS or VKr, so it rides along as an annotation on the vCenter
-// node rather than a row nobody can branch from.
+// ESX is a row of its own, collapsed until the reader opens it. Upstream publishes ESX
+// against the Supervisor, NSX and Avi, and ESX x Supervisor is enforced by the solver, so
+// the host version is a choice rather than a footnote on the vCenter node — but it is a
+// choice most readers never have to make, since ESX moves with vCenter.
+//
+// It sits at the bottom of the map, under vCenter: the hosts are what everything else
+// runs on. That is the opposite of the upgrade order, where vCenter moves first — the map
+// draws what rests on what, not what you touch first.
 
 // supervisorTrainRe pulls the "vsc" train out of a Supervisor version, e.g. the "9" in
 // "v1.32.9+vmware.2-fips-vsc9.1.0.0200".
@@ -164,8 +169,8 @@ func lineKey(p model.Product, r *graph.Release) string {
 type mapNode struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
-	// Detail is the secondary line: compatible ESX versions for vCenter, or the number
-	// of builds behind a grouped line.
+	// Detail is the secondary line: the number of builds behind a grouped line, or how
+	// many of them survive the current pin.
 	Detail string `json:"detail,omitempty"`
 	// Releases are the exact releases this node stands for, verbatim as upstream
 	// publishes them. This field is machine-readable identity: it is what the client
@@ -183,9 +188,6 @@ type mapNode struct {
 	// from, whether it is out of General Support. Display only — never sent back, and
 	// not necessarily in Releases order, since the build a selection ships with leads.
 	Notes []string `json:"notes,omitempty"`
-	// Hosts are the ESX releases a vCenter node can run on. ESX is not a layer of its
-	// own: its lines mirror vCenter's and it has no data against VKS or VKr.
-	Hosts []string `json:"hosts,omitempty"`
 	// Train is the release train a node belongs to, where a product ships more than
 	// one at the same version. Supervisor has two and they are not interchangeable.
 	Train string `json:"train,omitempty"`
@@ -242,16 +244,24 @@ type mapLayer struct {
 	// Optional layers are independent of each other: opening or pinning one says nothing
 	// about the other.
 	Optional bool `json:"optional,omitempty"`
+	// Collapsed marks a layer the client keeps folded until the reader opens it, even
+	// though it is part of every stack. ESX is the only one: it always has a version and
+	// the solver always constrains it, but that version follows vCenter, so showing the
+	// row by default would put a decision in front of everyone to serve the few who make
+	// it. Unlike Optional, this is display state alone — it never reaches the solver, and
+	// it is not part of the `with` parameter or of a static build's bundle key.
+	Collapsed bool `json:"collapsed,omitempty"`
 	// Note explains, in one line, when this layer applies. Shown on the collapsed row.
 	Note string `json:"note,omitempty"`
 }
 
-// optionalLayerNotes says when each optional layer is in the picture. Kept here rather
-// than in the client so the two cannot drift.
-var optionalLayerNotes = map[string]string{
+// layerNotes says when each folded layer is in the picture. Kept here rather than in the
+// client so the two cannot drift.
+var layerNotes = map[string]string{
 	"nsx": "Only when the Supervisor runs on NSX networking.",
 	"avi": "Only when Avi is the load balancer. Does not require NSX.",
 	"tmc": "Only with a self-hosted management plane. Runs on the guest-cluster layer.",
+	"esx": "In every stack, and it moves with vCenter. Open it to pin an exact host build.",
 }
 
 // optionalFromQuery parses the `with` parameter into optional product keys.
@@ -301,7 +311,13 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 	// Layers run bottom-up: the base you build on first. NSX and Avi sit between the
 	// hypervisor and the Supervisor, and TMC-SM sits on top of the guest-cluster layer;
 	// all three come back marked Optional so the client can keep them collapsed.
-	order := []string{"vcenter", "nsx", "avi", "supervisor", "vks", "vkr", "tmc"}
+	//
+	// ESX is a row of its own, and it is the bottom one: everything else runs on the
+	// hosts. It used to be an annotation on the vCenter node, on the grounds that its
+	// lines mirror vCenter's — but upstream publishes ESX against the Supervisor, NSX and
+	// Avi, and ESX × Supervisor is an enforced constraint, so the host version is a choice
+	// the reader makes rather than a detail of the vCenter one.
+	order := []string{"esx", "vcenter", "nsx", "avi", "supervisor", "vks", "vkr", "tmc"}
 	layers := make([]mapLayer, 0, len(order))
 	nodeReleases := map[string][]*graph.Release{}
 
@@ -309,7 +325,7 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 		p, _ := model.ByKey(key)
 		layer := mapLayer{
 			Key: p.Key, Label: p.Label, Nodes: []mapNode{},
-			Optional: p.Optional, Note: optionalLayerNotes[p.Key],
+			Optional: p.Optional, Collapsed: p.Key == "esx", Note: layerNotes[p.Key],
 		}
 
 		grouped := map[string][]*graph.Release{}
@@ -346,15 +362,7 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 			// have not shipped. That is not the same as "nothing is compatible", and it
 			// happens on every layer, not only on vCenter.
 			node.NoData = !hasAnyCompatible(g, members)
-			switch {
-			case p.Key == "vcenter":
-				hosts := hostCandidates(g, members)
-				node.Hosts = rawsOf(hosts)
-				// Listing every host patch is unreadable — a vCenter release can run
-				// nineteen of them. Collapse to the host lines; the exact list stays
-				// available on hover.
-				node.Detail = joinLimited(linesOf(hosts), 3)
-			case len(members) > 1:
+			if len(members) > 1 {
 				node.Detail = fmt.Sprintf("%d builds", len(members))
 			}
 			layer.Nodes = append(layer.Nodes, node)
@@ -394,18 +402,15 @@ func (s *Server) handleStackMap(w http.ResponseWriter, r *http.Request) {
 		// Supervisor — so they are looked up, never used to include or exclude.
 		// One solve context, built once and threaded into every solve below. Each site
 		// used to construct its own StackOptions, and three of the five forgot Include —
-		// so the lit set, the node narrowing, the provenance badges and the ESX host
-		// annotation all described a stack without the optional layers the reader had
-		// opened, while the recommendation and the edges described one with them.
+		// so the lit set, the node narrowing and the provenance badges all described a
+		// stack without the optional layers the reader had opened, while the
+		// recommendation and the edges described one with them.
 		probe := graph.StackOptions{Limit: 1, HidePatches: false, Include: include}
 
 		lit := map[string]bool{}
 		viable := map[string][]*graph.Release{}
 		for pid, rels := range g.ViableOptions(pins, probe) {
 			p, _ := model.ByID(pid)
-			if p.Key == "esx" {
-				continue
-			}
 			for _, rel := range rels {
 				id := nodeID(p, lineKey(p, rel))
 				lit[id] = true
@@ -497,14 +502,6 @@ func narrowNodes(
 			setPin(g, node, rels)
 			setProvenance(g, node, pins, rels, probe)
 			switch {
-			case layers[li].Key == "vcenter":
-				// A vCenter node is one release, and it keeps its ESX annotation — but
-				// the hosts have to answer the question being asked. ESX gates the
-				// Supervisor as much as vCenter does, so with something pinned above,
-				// the hosts that cannot carry it are not hosts for this selection.
-				hosts := hostsWithPin(g, pins, rels, probe)
-				node.Hosts = rawsOf(hosts)
-				node.Detail = joinLimited(linesOf(hosts), 3)
 			case layers[li].Key == "supervisor":
 				node.Detail, node.Notes = describeSupervisor(rels, pinnedVCenter, vcenterReleases)
 			case len(node.Releases) < total:
@@ -752,10 +749,16 @@ func describeSupervisor(rels []*graph.Release, pinnedVCenter string, vcenterRele
 // without displacing the vCenter-to-Supervisor edge, TMC-SM hangs off vCenter, VKS and VKr
 // at the top of the chain, and any of them can be absent.
 //
+// Which end of a pair is the lower one comes from the rows, not from the model's upgrade
+// order. The two disagree over ESX: vCenter upgrades first, and the hosts are still what
+// it all runs on, so ESX is the bottom row. The client draws each connection from the top
+// of the lower node to the bottom of the upper one, so a pair handed over the wrong way
+// round draws a curve that doubles back.
+//
 // A collapsed optional layer contributes nothing. That keeps the default map identical
 // to what it was, and keeps the cost down — every candidate pair below costs one solve
 // per node combination.
-func layerPairs(byKey map[string]mapLayer, include []string) [][2]string {
+func layerPairs(byKey map[string]mapLayer, rows []string, include []string) [][2]string {
 	rendered := func(key string) bool {
 		l, ok := byKey[key]
 		if !ok || len(l.Nodes) == 0 {
@@ -766,16 +769,21 @@ func layerPairs(byKey map[string]mapLayer, include []string) [][2]string {
 		}
 		return slices.Contains(include, key)
 	}
+	row := make(map[string]int, len(rows))
+	for i, key := range rows {
+		row[key] = i
+	}
 
 	var out [][2]string
 	for _, e := range model.Edges {
 		if !e.Primary || !rendered(e.From) || !rendered(e.To) {
 			continue
 		}
-		from, _ := model.ByKey(e.From)
-		to, _ := model.ByKey(e.To)
-		lower, upper := model.OrderPair(from, to)
-		out = append(out, [2]string{lower.Key, upper.Key})
+		lower, upper := e.From, e.To
+		if row[upper] < row[lower] {
+			lower, upper = upper, lower
+		}
+		out = append(out, [2]string{lower, upper})
 	}
 	return out
 }
@@ -795,12 +803,14 @@ func adjacentEdges(
 	probe graph.StackOptions,
 ) []mapEdge {
 	byKey := map[string]mapLayer{}
+	rows := make([]string, 0, len(layers))
 	for _, l := range layers {
 		byKey[l.Key] = l
+		rows = append(rows, l.Key)
 	}
 
 	var out []mapEdge
-	for _, pair := range layerPairs(byKey, probe.Include) {
+	for _, pair := range layerPairs(byKey, rows, probe.Include) {
 		lower, upper := byKey[pair[0]], byKey[pair[1]]
 		for _, a := range lower.Nodes {
 			if !lit[a.ID] {
@@ -984,71 +994,6 @@ func phaseRank(p graph.SupportPhase) int {
 	}
 }
 
-// hostCandidates lists the ESX releases compatible with any of the given vCenter
-// releases, newest first. ESX rides along on the vCenter node rather than occupying a
-// layer of its own.
-//
-// This is the pairwise answer only. With something pinned above vCenter, use
-// hostsWithPin: ESX gates the Supervisor too, so being compatible with the vCenter is
-// not enough to be a host for the stack on screen.
-func hostCandidates(g *graph.Graph, vcenters []*graph.Release) []*graph.Release {
-	esx, ok := model.ByKey("esx")
-	if !ok {
-		return nil
-	}
-	seen := map[int]bool{}
-	var out []*graph.Release
-	for _, vc := range vcenters {
-		for _, e := range g.Compat[vc.ID] {
-			peer := g.Releases[e.Peer]
-			if peer == nil || peer.ProductID != esx.ID || !graph.Compatible(e.Status) {
-				continue
-			}
-			if !seen[peer.ID] {
-				seen[peer.ID] = true
-				out = append(out, peer)
-			}
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return version.Compare(out[i].Version, out[j].Version) > 0
-	})
-	return out
-}
-
-// hostsWithPin narrows the hosts on a vCenter node to the ones that can carry the whole
-// selected stack, not merely that vCenter.
-//
-// ESX -> Supervisor is an enforced dependency: the Supervisor control plane runs on the
-// hosts. Listing every ESX release the vCenter pairs with therefore overstates the
-// answer whenever something above vCenter is pinned — pin Supervisor 1.33 and the
-// unnarrowed list offers eleven ESX patches for a Supervisor the matrix publishes
-// against one of them. Each candidate is put through the same solver that decides
-// whether a node is lit, so the annotation and the recommended stack cannot disagree.
-func hostsWithPin(g *graph.Graph, pins map[int]*graph.Release, vcenters []*graph.Release, probe graph.StackOptions) []*graph.Release {
-	candidates := hostCandidates(g, vcenters)
-	if len(pins) == 0 {
-		return candidates
-	}
-	trial := make(map[int]*graph.Release, len(pins)+2)
-	var out []*graph.Release
-	for _, host := range candidates {
-		for _, vc := range vcenters {
-			clear(trial)
-			for k, v := range pins {
-				trial[k] = v
-			}
-			trial[vc.ProductID] = vc
-			trial[host.ProductID] = host
-			if g.StackExists(trial, probe) {
-				out = append(out, host)
-				break
-			}
-		}
-	}
-	return out
-}
-
 // rawsOf renders releases as the strings upstream publishes.
 func rawsOf(rels []*graph.Release) []string {
 	out := make([]string, 0, len(rels))
@@ -1056,43 +1001,6 @@ func rawsOf(rels []*graph.Release) []string {
 		out = append(out, r.Raw)
 	}
 	return out
-}
-
-// linesOf collapses releases to their version lines: "9.1", "9.0", "8.0U3". That is the
-// granularity anyone picking a host actually cares about.
-func linesOf(rels []*graph.Release) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, r := range rels {
-		line := vsphereLine(r)
-		if !seen[line] {
-			seen[line] = true
-			out = append(out, line)
-		}
-	}
-	return out
-}
-
-// vsphereLine renders "8.0U3" for the update-form and "9.1" for the dotted form.
-func vsphereLine(r *graph.Release) string {
-	if len(r.Version.Key) == 0 || len(r.Version.Key[0]) < 4 {
-		return r.Raw
-	}
-	k := r.Version.Key[0]
-	if k[3] > 0 {
-		return fmt.Sprintf("%d.%dU%d", k[0], k[1], k[3])
-	}
-	return fmt.Sprintf("%d.%d", k[0], k[1])
-}
-
-func joinLimited(items []string, max int) string {
-	if len(items) == 0 {
-		return ""
-	}
-	if len(items) <= max {
-		return strings.Join(items, " · ")
-	}
-	return strings.Join(items[:max], " · ") + fmt.Sprintf(" +%d", len(items)-max)
 }
 
 func hasAnyCompatible(g *graph.Graph, rels []*graph.Release) bool {

@@ -205,7 +205,8 @@ func (s *mcpServer) handle(req rpcRequest) rpcResponse {
 				"and VKr, plus optional NSX, Avi Load Balancer and TMC Self-Managed, from a local mirror of " +
 				"the Broadcom interoperability matrix. " +
 				"Start with vkstack_stack to solve a whole valid stack from one pinned " +
-				"version; vkstack_check validates a stack you already have. " +
+				"version; vkstack_check validates a stack you already have; vkstack_path finds " +
+				"the shortest upgrade route between two stacks through valid states. " +
 				"NSX, Avi and TMC Self-Managed are optional and independent of each other: none appears " +
 				"in a stack unless it is pinned or named in vkstack_stack's `include`, " +
 				"and a stack without them is a complete answer, not a partial one. " +
@@ -308,6 +309,43 @@ func mcpTools() []map[string]any {
 			},
 		},
 		{
+			"name": "vkstack_path",
+			"description": "The shortest upgrade route from one stack to another where every " +
+				"state on the way is valid. Each step changes one product. The Supervisor and " +
+				"guest clusters (VKr) move one Kubernetes minor per step; VKr is constrained by " +
+				"VKS alone. Optional products " +
+				"take part only when pinned on both sides, and usually decide the route. The " +
+				"ESX 8 with vsc9 Supervisor state is flagged transitional: the vSphere 8 to 9 " +
+				"upgrade order (vCenter, VKS, Supervisor, ESX) passes through it. The matrix " +
+				"says which versions coexist, not which hops are supported upgrades, so use " +
+				"`exclude` for releases back-in-time rules or upgrade checklists rule out.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"from": map[string]any{
+						"type":                 "object",
+						"description":          `starting release per product, e.g. {"vcenter": "8.0U3", "supervisor": "v1.28.3+vmware.2-fips.1-vsc0.1.9"}`,
+						"additionalProperties": map[string]any{"type": "string"},
+					},
+					"to": map[string]any{
+						"type":                 "object",
+						"description":          "target release per product; pin the same products as `from`",
+						"additionalProperties": map[string]any{"type": "string"},
+					},
+					"exclude": map[string]any{
+						"type": "object",
+						"description": `releases the path must not land on, per product, e.g. ` +
+							`{"vcenter": ["9.0.2.0"]}`,
+						"additionalProperties": map[string]any{
+							"type": "array", "items": map[string]any{"type": "string"},
+						},
+					},
+					"generation": generation,
+				},
+				"required": []string{"from", "to"},
+			},
+		},
+		{
 			"name": "vkstack_compat",
 			"description": "The raw pairwise answer for one release: everything the " +
 				"matrix lists it against, grouped by product. Use vkstack_stack instead " +
@@ -370,14 +408,17 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 	}
 
 	var args struct {
-		Pins        map[string]string `json:"pins"`
-		Product     string            `json:"product"`
-		Version     string            `json:"version"`
-		HidePatches bool              `json:"hidePatches"`
-		Patches     bool              `json:"patches"` // accepted and ignored: now the default
-		Legacy      bool              `json:"legacy"`
-		Include     []string          `json:"include"`
-		Generation  int               `json:"generation"`
+		Pins        map[string]string   `json:"pins"`
+		Product     string              `json:"product"`
+		Version     string              `json:"version"`
+		HidePatches bool                `json:"hidePatches"`
+		Patches     bool                `json:"patches"` // accepted and ignored: now the default
+		Legacy      bool                `json:"legacy"`
+		Include     []string            `json:"include"`
+		Generation  int                 `json:"generation"`
+		From        map[string]string   `json:"from"`
+		To          map[string]string   `json:"to"`
+		Exclude     map[string][]string `json:"exclude"`
 	}
 	if len(params.Arguments) > 0 {
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
@@ -442,6 +483,34 @@ func (s *mcpServer) callTool(raw json.RawMessage) map[string]any {
 			return toolError("pin at least two products to check a stack")
 		}
 		return toolResult(checkJSON(gr.Check(pins)))
+
+	case "vkstack_path":
+		src, err := resolveNamedPins(gr, args.From)
+		if err != nil {
+			return toolError(classify(err).Message)
+		}
+		dst, err := resolveNamedPins(gr, args.To)
+		if err != nil {
+			return toolError(classify(err).Message)
+		}
+		excl, err := excludeFromMap(gr, args.Exclude)
+		if err != nil {
+			return toolError(classify(err).Message)
+		}
+		res, fail := gr.Path(src, dst, graph.PathOptions{Exclude: excl})
+		if fail != nil {
+			// No route is an answer, returned as a result so the agent can read why.
+			coded := pathFailureErr(fail).(*CodedError)
+			out := map[string]any{"ok": false, "reason": fail.Reason, "message": fail.Message}
+			for k, v := range coded.Details {
+				out[k] = v
+			}
+			if coded.Hint != "" {
+				out["hint"] = coded.Hint
+			}
+			return toolResult(out)
+		}
+		return toolResult(pathJSON(res))
 
 	case "vkstack_stack":
 		pins, err := resolveNamedPins(gr, args.Pins)

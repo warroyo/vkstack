@@ -117,6 +117,7 @@ the binary.
 | `stack <product> <version>` | Solve a whole valid stack from one or more pinned versions (`--with nsx,avi` to include the optional components) |
 | `compat <product> <version>` | The raw pairwise answer for one release |
 | `check --vcenter … --esx …` | Validate a fully pinned stack; exit 6 if incompatible |
+| `path --from … --to …` | Shortest upgrade route between two stacks where every state is valid; exit 7 if none |
 | `products` / `releases` | What is in scope, and which pairs upstream publishes |
 | `serve` | Web UI: the stack map, local by default or hosted (see below) |
 | `static` | Generate the UI as plain files, for a static host (see below) |

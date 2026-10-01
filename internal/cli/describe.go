@@ -173,6 +173,25 @@ func surface() map[string]any {
 				},
 			},
 			{
+				"name": "path", "schema": "vkstack.path", "needsCache": true,
+				"flags": map[string]string{
+					"--from":    "starting release as product=version; repeat per product",
+					"--to":      "target release as product=version; pin the same products as --from",
+					"--exclude": "release the path must not land on, as product=version; repeatable",
+				},
+				"summary": "Shortest upgrade route between two stacks where every state is valid. " +
+					"One product changes per step; Supervisor and VKr move one Kubernetes minor " +
+					"per step; VKr is constrained by VKS alone; ESX 8 with a vsc9 Supervisor is allowed and flagged transitional. " +
+					"Exits 7 when no route exists.",
+				"examples": []string{
+					"vkstack path --from vcenter=8.0U3 --from supervisor=v1.28.3+vmware.2-fips.1-vsc0.1.9 " +
+						"--to vcenter=9.1.1.0 --to supervisor=v1.33.13+vmware.1-fips-vsc9.1.1.0",
+				},
+				"note": "A route through valid states is not proof each hop is a supported " +
+					"upgrade; check back-in-time rules and upgrade checklists.",
+				"exitCodes": map[string]int{"route": ExitOK, "no_route": ExitNoStack},
+			},
+			{
 				"name": "explain", "schema": "vkstack.model", "needsCache": false,
 				"summary": "The dependency model: products, relationships, how each is " +
 					"known, and what this tool does not know.",

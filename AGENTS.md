@@ -76,7 +76,7 @@ Branch on `code`. `hint` names the next thing to try, so recovery does not need 
 | 4 | ambiguous | the version matched several releases — pass one verbatim |
 | 5 | no_data | the cache is empty; run `vkstack refresh` |
 | 6 | incompatible | **the question was valid and the answer is no** |
-| 7 | no_stack | no complete stack exists for those pins |
+| 7 | no_stack | no complete stack exists for those pins, or `path` found no route |
 
 6 and 7 are answers, not malfunctions. `check` writes its full verdict to stdout and
 *then* exits 6 — read the payload, do not treat the exit code alone as a failure.
@@ -185,7 +185,7 @@ alone — only a completely empty one is filled.
 
 ### What the server gives you
 
-Tools: `vkstack_stack`, `vkstack_check`, `vkstack_compat`, `vkstack_releases`,
+Tools: `vkstack_stack`, `vkstack_check`, `vkstack_path`, `vkstack_compat`, `vkstack_releases`,
 `vkstack_products`, `vkstack_model`. Each returns both a text block and
 `structuredContent`, so a client that supports structured results need not re-parse.
 
@@ -193,6 +193,15 @@ Tools: `vkstack_stack`, `vkstack_check`, `vkstack_compat`, `vkstack_releases`,
 the stack — `["nsx"]`, `["avi"]`, `["tmc"]`, or any combination. Each stands alone; omit
 it for the five core products only. `vkstack_products` marks which products are `optional`, so the
 valid values are discoverable rather than something to hardcode.
+
+`vkstack_path` takes `from` and `to` stacks (the same products pinned on both sides) and
+returns the shortest sequence of single-product upgrades where every state is valid. The
+Supervisor and guest clusters move one Kubernetes minor per step, and guest clusters are
+constrained by VKS alone. ESX 8 with a vsc9 Supervisor is allowed and
+flagged `transitional`, because the vSphere 8 → 9 upgrade order (vCenter, VKS, Supervisor,
+ESX) passes through it. When no route exists, `blockedBy` names the optional product in the
+way. Pass `exclude` for releases a back-in-time rule or an upgrade checklist rules out: the
+matrix says what coexists, not which hops are supported upgrades.
 
 A failed call comes back as a tool result with `isError: true` and the reason in text,
 not as a protocol error — the model should be able to see what went wrong and retry.
@@ -260,6 +269,10 @@ vkstack stack vcenter 9.1.0.0300 --with nsx,avi
 
 # Pinning an optional component is its own opt-in
 vkstack stack --avi 32.1.2
+
+# Shortest upgrade route where every state in between is valid; exit 7 means no route
+vkstack path --from vcenter=8.0U3 --from supervisor=v1.28.3+vmware.2-fips.1-vsc0.1.9 --from avi=22.1.7 \
+             --to vcenter=9.1.1.0 --to supervisor=v1.33.13+vmware.1-fips-vsc9.1.1.0 --to avi=32.1.3
 
 # Validate a stack you already have; exit 6 means incompatible
 vkstack check --vcenter 8.0U3k --esx 8.0U3 --supervisor v1.33.9+vmware.3-fips-vsc0.1.15

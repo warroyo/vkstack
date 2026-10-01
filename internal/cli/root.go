@@ -80,6 +80,7 @@ Start with ` + "`vkstack explain`" + ` for how the pieces fit together, or
 		newStackCmd(),
 		newCompatCmd(),
 		newCheckCmd(),
+		newPathCmd(),
 		newServeCmd(),
 		newStaticCmd(),
 		newCacheCmd(),

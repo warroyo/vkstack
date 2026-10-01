@@ -9,3 +9,5 @@
 *.db-shm
 # Local state from a wrangler dev run — cache and build output, not source.
 /.wrangler/
+# Bytecode Python leaves beside the scripts it runs.
+__pycache__/

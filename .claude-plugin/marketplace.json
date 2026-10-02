@@ -1,0 +1,14 @@
+{
+  "name": "vkstack",
+  "description": "vkstack for Claude Code: the MCP server and the skills built on it.",
+  "owner": {
+    "name": "Will Arroyo"
+  },
+  "plugins": [
+    {
+      "name": "vkstack",
+      "source": "./plugin",
+      "description": "The vkstack MCP server and an upgrade-planning skill for vSphere / VCF stacks, backed by the Broadcom interoperability matrix."
+    }
+  ]
+}

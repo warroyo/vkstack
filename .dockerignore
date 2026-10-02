@@ -9,6 +9,8 @@
 .git/
 .github/
 .claude/
+.claude-plugin/
+plugin/
 deploy/
 docs/
 install.sh

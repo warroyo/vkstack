@@ -107,6 +107,31 @@ answer at all; it costs about a minute, once. [AGENTS.md](AGENTS.md) has the res
 tools, the envelope, the exit codes, and the same config for a machine that already has
 the binary.
 
+### Claude Code plugin
+
+The repo is also a Claude Code plugin marketplace. The plugin carries the MCP config above
+and the `vkstack-upgrade-plan` skill, so one install gets both:
+
+```
+/plugin marketplace add warroyo/vkstack
+/plugin install vkstack@vkstack
+```
+
+Then run `/reload-plugins`. If you already added the server by hand, remove it first with
+`claude mcp remove vkstack`, or you'll run two copies.
+
+The skill turns a current stack and a target into an ordered upgrade plan. Every state in
+between is checked against the matrix through the MCP tools, and each hop is checked
+against Broadcom's release notes and KBs for back-in-time rules and upgrade order. The
+output has a mermaid flow diagram and links to the docs behind each claim. Ask for it in
+plain terms:
+
+> Plan an upgrade from vCenter 8.0U3, Supervisor v1.28.3+vmware.2-fips.1-vsc0.1.9, Avi
+> 22.1.6, VKS 3.0.0 and clusters on 1.28.8 to VCF 9.1.1.
+
+To use the skill without the plugin, add the MCP server as above and symlink
+`plugin/skills/vkstack-upgrade-plan` into `~/.claude/skills/`.
+
 ## Commands
 
 | Command | What it does |
@@ -447,6 +472,9 @@ internal/cli/       cobra commands; output.go holds the agent-facing contract,
 internal/web/       localhost UI, assets embedded
 npm/                the npm face: bin/vkstack.js launches the right prebuilt
                     binary, build.mjs stages the packages from a goreleaser build
+plugin/             the Claude Code plugin: .mcp.json for the npx server, and
+                    skills/vkstack-upgrade-plan; .claude-plugin/marketplace.json
+                    at the repo root is what makes the repo installable
 docs/model.md       generated from internal/model, do not edit by hand
 AGENTS.md           the contract for programs calling this tool
 ```

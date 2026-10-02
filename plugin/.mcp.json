@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vkstack": {
+      "command": "npx",
+      "args": ["-y", "@warroyo90/vkstack-mcp", "mcp", "--refresh-if-empty"]
+    }
+  }
+}

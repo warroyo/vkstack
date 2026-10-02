@@ -1,0 +1,10 @@
+{
+  "name": "vkstack",
+  "description": "The vkstack MCP server and an upgrade-planning skill for vSphere / VCF stacks, backed by the Broadcom interoperability matrix.",
+  "author": {
+    "name": "Will Arroyo"
+  },
+  "homepage": "https://github.com/warroyo/vkstack",
+  "repository": "https://github.com/warroyo/vkstack",
+  "license": "MIT"
+}

@@ -1178,6 +1178,13 @@ button.ghost.inline { margin-left: 0.6rem; }
 .map-node.is-technical-guidance .map-node-box { stroke: var(--tg); fill: var(--tg-soft); }
 .map-node.is-end-of-support .map-node-box { stroke: var(--eos); fill: var(--eos-soft); }
 
+/* A pin keeps its solid fill whatever the phase: the pinned label is drawn in --on-accent,
+   which is unreadable on a soft phase fill. The phase still shows in the outline. */
+.node.pinned.phase-technical-guidance,
+.node.pinned.phase-end-of-support { background: var(--signal); }
+.map-node.is-pinned.is-technical-guidance .map-node-box,
+.map-node.is-pinned.is-end-of-support .map-node-box { fill: var(--signal); }
+
 /* Provenance, on the node itself. "not tested" is upstream's own hedge on a yes;
    "inferred" means no upstream result exists for a pair the stack depends on.
    These are critical caveats, but written out on the node they were the wrong size for

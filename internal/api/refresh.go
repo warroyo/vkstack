@@ -14,8 +14,8 @@ type Progress func(step, total int, message string)
 // Refresh replaces the cache contents with a fresh pull from upstream.
 //
 // The whole refresh runs in one transaction and stamps fetched_at last, so an interrupted
-// run never leaves a cache that looks complete. It probes all 28 product pairs rather
-// than the 17 currently known to be populated: upstream coverage can change, and
+// run never leaves a cache that looks complete. It probes all 26 product pairs rather
+// than the 15 currently known to be populated: upstream coverage can change, and
 // recording which pairs are empty is itself useful data.
 func Refresh(ctx context.Context, c *Client, db *store.DB, progress Progress) error {
 	if progress == nil {
@@ -42,6 +42,11 @@ func Refresh(ctx context.Context, c *Client, db *store.DB, progress Progress) er
 		return err
 	}
 	defer w.Rollback() //nolint:errcheck // no-op once Commit has succeeded
+
+	// The cache mirrors upstream, so what upstream no longer returns has to go.
+	if err := w.ClearMatrix(); err != nil {
+		return err
+	}
 
 	found := map[int]bool{}
 	for _, p := range products {

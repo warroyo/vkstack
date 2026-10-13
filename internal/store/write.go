@@ -69,6 +69,21 @@ func (db *DB) BeginWrite() (*Writer, error) {
 }
 
 // PutProduct upserts a product.
+// ClearMatrix empties everything a matrix refresh rewrites: products, releases, edges and
+// pair coverage. Every write below is an upsert, so without this a release or a pair
+// upstream has withdrawn stays in the cache for good and keeps being offered. It runs
+// inside the refresh transaction, so a refresh that fails rolls back to the previous
+// contents. Lifecycle rows are cleared per product by ClearLifecycle instead: that fetch
+// is allowed to fail without costing the matrix.
+func (w *Writer) ClearMatrix() error {
+	for _, table := range []string{"compat", "pair_coverage", "releases", "products"} {
+		if _, err := w.tx.Exec(`DELETE FROM ` + table); err != nil {
+			return fmt.Errorf("clearing %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 func (w *Writer) PutProduct(p Product) error {
 	if _, err := w.products.Exec(p.ID, p.Name, p.Aliases, p.ShortKey); err != nil {
 		return fmt.Errorf("upserting product %d: %w", p.ID, err)

@@ -234,3 +234,45 @@ func TestLoadStampsPublishedPhase(t *testing.T) {
 		t.Errorf("Supervisor picked up lifecycle data: eogs=%d source=%q", r.EOGSDate, r.EffectivePhaseSource())
 	}
 }
+
+// A release the portal says nothing about cannot outlive the release that replaced it.
+// VKS 3.0.0 has no lifecycle row and the matrix flags it as generally supported, while
+// 3.1.0 is past its published date.
+func TestUndatedReleaseFollowsTheNewerDatedOne(t *testing.T) {
+	snap := fixture()
+	snap.Releases = append(snap.Releases,
+		store.Release{ID: 43, ProductID: vks, HybridVersion: "3.0.0", ReleaseType: "Major", GADate: 1},
+		// Newer than everything dated, and undated: nothing above it has ended, so the
+		// flags stand.
+		store.Release{ID: 44, ProductID: vks, HybridVersion: "3.8.0+v1.37", ReleaseType: "Minor", GADate: 1},
+	)
+	snap.Compat = append(snap.Compat,
+		store.Compat{ARelease: 31, BRelease: 43, Status: store.StatusCompatible},
+		store.Compat{ARelease: 31, BRelease: 44, Status: store.StatusCompatible},
+	)
+	snap.Lifecycle = []store.Lifecycle{
+		{ProductKey: "vks", ReleaseKey: "3.4.0+v1.33", EOGSDate: ms(t, "2026-06-28")},
+		{ProductKey: "vks", ReleaseKey: "3.7.0+v1.36", EOGSDate: ms(t, "2027-06-28")},
+	}
+	for i := range snap.Releases {
+		snap.Releases[i].TechGuided, snap.Releases[i].GenGuided = true, true
+	}
+
+	g, err := Load(snap, Options{Now: at(t, "2026-10-12")})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if r := g.Releases[43]; r.EffectivePhase() != PhaseEndOfSupport || r.EffectivePhaseSource() != SourceInferred {
+		t.Errorf("VKS 3.0.0 = %q from %q, want %q from %q",
+			r.EffectivePhase(), r.EffectivePhaseSource(), PhaseEndOfSupport, SourceInferred)
+	}
+	if r := g.Releases[42]; r.EffectivePhase() != PhaseEndOfSupport || r.EffectivePhaseSource() != SourceLifecycle {
+		t.Errorf("VKS 3.4.0 = %q from %q, want %q from %q",
+			r.EffectivePhase(), r.EffectivePhaseSource(), PhaseEndOfSupport, SourceLifecycle)
+	}
+	for _, id := range []int{41, 44} {
+		if r := g.Releases[id]; r.EffectivePhase() != PhaseGeneral {
+			t.Errorf("VKS %s = %q, want %q", r.Raw, r.EffectivePhase(), PhaseGeneral)
+		}
+	}
+}

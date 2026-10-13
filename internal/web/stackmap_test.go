@@ -427,13 +427,13 @@ func TestDeadEndPinIsDistinguishableFromNoPin(t *testing.T) {
 		t.Error("an unpinned map should not carry a lit set")
 	}
 
-	dead := get(t, h, "/api/stackmap?product=vkr&version=1.20.0")
+	dead := get(t, h, "/api/stackmap?product=esx&version=8.0U3a")
 	lit, ok := dead["lit"].([]any)
 	if !ok {
 		t.Fatal("a pinned map must carry a lit set even when nothing is lit")
 	}
 	if len(lit) != 0 {
-		t.Errorf("VKr 1.20.0 reaches no stack, so nothing should be lit: %v", lit)
+		t.Errorf("ESX 8.0U3a reaches no stack, so nothing should be lit: %v", lit)
 	}
 	if _, ok := dead["recommended"]; ok {
 		t.Error("a dead end must not recommend a stack")

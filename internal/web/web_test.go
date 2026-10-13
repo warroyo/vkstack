@@ -52,9 +52,6 @@ func testSnapshot(t *testing.T) *store.Snapshot {
 	add(32, sup, "v1.33.0+vmware.1-fips-vsc9.0.0.0100")
 	add(41, vks, "3.7.0+v1.36")
 	add(51, vkr, "1.36.1 (TKr 1.36.1 for vSphere 9.x)")
-	// Listed against vCenter but reachable by no VKS: the matrix calls it compatible
-	// while no whole stack can contain it.
-	add(52, vkr, "1.20.0")
 	// The optional layers. Two builds on one NSX line, so the layer exercises grouping;
 	// one Avi build per line.
 	add(61, nsx, "9.1.0.0")
@@ -93,7 +90,6 @@ func testSnapshot(t *testing.T) *store.Snapshot {
 	ok(21, 51)
 	ok(31, 41)
 	ok(41, 51)
-	ok(21, 52) // compatible with vCenter, bridged by nothing
 	// The 8.0U3 base carries the other 1.33 build, and only that one.
 	ok(12, 22)
 	ok(13, 22) // accepted by the vCenter, but never listed against a Supervisor

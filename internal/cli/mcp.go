@@ -365,7 +365,9 @@ func mcpTools() []map[string]any {
 			"name": "vkstack_releases",
 			"description": "Every release of one product, newest last, with support phase. " +
 				"The phase prefers Broadcom's published end-of-general-support date (eogsDate) " +
-				"over the interop matrix flags, which lag; phaseSource says which decided.",
+				"over the interop matrix flags, which lag; phaseSource says which decided: " +
+				"matrix, lifecycle, or inferred (no date published, and a newer release of " +
+				"the same product is already past general support).",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -383,7 +385,7 @@ func mcpTools() []map[string]any {
 		{
 			"name": "vkstack_products",
 			"description": "The products in scope, their release counts, and which of " +
-				"the 28 product pairs upstream actually publishes.",
+				"the 26 product pairs upstream actually publishes.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{

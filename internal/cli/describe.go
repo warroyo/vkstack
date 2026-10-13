@@ -102,13 +102,14 @@ func surface() map[string]any {
 				"has no NSX. TMC Self-Managed is the one optional product that is a real " +
 				"dependency — versioned against vCenter, VKS and VKr, and enforced when " +
 				"it is in the stack.",
-			"enforcedPairs": "Thirteen of the 28 pairs are allowed to decide a stack. " +
-				"vCenter×VKS and vCenter×VKr are published but not dependencies: VKS runs " +
-				"on the Supervisor and VKr is provisioned by VKS. ESX×NSX and ESX×Avi are " +
+			"enforcedPairs": "Thirteen of the 26 pairs are allowed to decide a stack. " +
+				"vCenter×VKS and vCenter×VKr are not pairs at all: VKS runs on the " +
+				"Supervisor and VKr is provisioned by VKS, so neither is read, enforced " +
+				"or reported, and upstream is removing both. ESX×NSX and ESX×Avi are " +
 				"real dependencies that are still not enforced, because vCenter and ESX " +
 				"move together and both optional products are already constrained against " +
 				"vCenter, so the host pair rules out nothing the vCenter pair does not — " +
-				"and ESX×Avi is almost entirely blank upstream besides. All four are " +
+				"and ESX×Avi is almost entirely blank upstream besides. Both are " +
 				"reported, never used to include or exclude. TMC Self-Managed adds three " +
 				"enforced pairs: TMC×vCenter, TMC×VKS and TMC×VKr.",
 			"unpublishedPairs": "ESX×VKS, ESX×VKr, Supervisor×VKr, NSX×VKS, NSX×VKr, " +

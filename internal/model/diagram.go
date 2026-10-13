@@ -18,7 +18,7 @@ func AllPublished(int, int) bool { return true }
 // pairs on 2026-08-21). It exists so `vkstack explain` and the generated docs/model.md
 // are correct on a cold install with no cache.
 //
-// Eleven of the twenty-eight pairs. Seven are against VKS or VKr — neither NSX nor Avi is
+// Eleven of the twenty-six pairs. Seven are against VKS or VKr — neither NSX nor Avi is
 // published against the guest-cluster layer, consistent with neither being a dependency of
 // it. The other four are TMC Self-Managed against everything that is not one of its three
 // dependencies: it is published against vCenter, VKS and VKr, and against nothing else.
@@ -273,7 +273,7 @@ func DecidingPairs(covered Coverage) string {
 		sentenceCase(countWord(len(deps))), countWord(len(Edges)), commaAnd(deps))
 	fmt.Fprintf(&b, "The other %s are looked up but never allowed to decide a stack: %s. The reason "+
 		"differs by pair and is given with each relationship above. Some are not dependencies "+
-		"at all — VKr is provisioned by VKS, so a direct vCenter verdict on it decides nothing. "+
+		"at all — VKr is provisioned by VKS, so nothing has to hold between it and the Supervisor. "+
 		"Others are real dependencies that still constrain nothing in practice: NSX does prepare "+
 		"the ESX hosts as transport nodes, but that grid is nearly as permissive as the vCenter "+
 		"one and the two move together, so enforcing it rules out nothing the vCenter pair has "+

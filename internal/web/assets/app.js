@@ -1927,6 +1927,11 @@ function peekParts(layer, node) {
     head.push(`${node.phaseLabel}${node.eogs ? ` — general support ended ${node.eogs}` : ""}. ` +
       `Broadcom's product lifecycle matrix retired this; the interoperability matrix ` +
       `still lists it as supported.`);
+  } else if (node.legacy && node.phaseSource === "inferred") {
+    // Nothing published for this one. A newer release of the same product has already
+    // left general support, so this one cannot still be in it.
+    head.push(`${node.phaseLabel}. Broadcom publishes no support dates for this release; ` +
+      `a newer release has already left general support, so this one has too.`);
   } else if (node.legacy) {
     head.push(`${node.phaseLabel} — this is what the interop site's ` +
       `"hide legacy releases" checkbox removes.`);

@@ -59,6 +59,10 @@ const (
 	SourceMatrix PhaseSource = "matrix"
 	// SourceLifecycle: a published date that has passed.
 	SourceLifecycle PhaseSource = "lifecycle"
+	// SourceInferred: the portal publishes nothing for this release, and a newer release
+	// of the same product is already past general support on a published date. Support
+	// ends in release order, so the older one cannot still be in it.
+	SourceInferred PhaseSource = "inferred"
 )
 
 // Release is a release with its parsed version.
@@ -305,11 +309,15 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 		g.Releases[r.ID] = rel
 	}
 
-	// Pass 2: keep edges where both endpoints survived, in both directions.
+	g.inferUndatedPhases()
+
+	// Pass 2: keep edges where both endpoints survived, in both directions. A pair the
+	// model does not read is dropped here as well as at refresh, because a cache written
+	// by an older build still carries vCenter against VKS and VKr.
 	for _, c := range snap.Compat {
 		a, aOK := g.Releases[c.ARelease]
 		b, bOK := g.Releases[c.BRelease]
-		if !aOK || !bOK {
+		if !aOK || !bOK || !model.InScope(a.ProductID, b.ProductID) {
 			continue
 		}
 		g.Compat[a.ID] = append(g.Compat[a.ID], Edge{Peer: b.ID, Status: c.Status, Footnotes: c.Footnotes})
@@ -330,8 +338,58 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 	return g, nil
 }
 
-// pruneUnreachable removes floor-less releases with no compatible edge to a base-layer
+// inferUndatedPhases retires a release the portal says nothing about when a newer release
+// of the same product has already left general support on a published date.
+//
+// The matrix flags are all there is for such a release, and they lag: VKS 3.0.0 has no
+// lifecycle row and is still flagged as in general support, while 3.1.0, which replaced
+// it, ended on 2025-09-28. The nearest newer release with published dates decides, and
+// only downwards — a release is never moved back into support this way.
+func (g *Graph) inferUndatedPhases() {
+	byProduct := map[int][]*Release{}
+	for _, r := range g.Releases {
+		byProduct[r.ProductID] = append(byProduct[r.ProductID], r)
+	}
+	for _, rels := range byProduct {
+		sort.Slice(rels, func(i, j int) bool {
+			if c := version.Compare(rels[i].Version, rels[j].Version); c != 0 {
+				return c > 0
+			}
+			return rels[i].ID > rels[j].ID
+		})
+		// Newest first, carrying the phase of the last dated release seen.
+		var newer SupportPhase
+		for _, r := range rels {
+			if r.LifecycleKey != "" {
+				newer = r.phase
+				continue
+			}
+			if newer != "" && phaseRank(newer) > phaseRank(r.phase) {
+				r.phase, r.phaseSource = newer, SourceInferred
+			}
+		}
+	}
+}
+
+// phaseRank orders the phases from in support to out of it.
+func phaseRank(p SupportPhase) int {
+	switch p {
+	case PhaseGeneral:
+		return 0
+	case PhaseTechnicalGuidance:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// pruneUnreachable removes floor-less releases that cannot be placed on a base-layer
 // (ESX or vCenter) release that survived the floor.
+//
+// A direct compatible edge to a base release is enough. So is a compatible edge to a
+// surviving release of the product it actually depends on, when that dependency is not a
+// base product: VKS runs on the Supervisor and VKr is provisioned by VKS, and neither
+// has any pair with vCenter or ESX to be judged on.
 func (g *Graph) pruneUnreachable(floors map[string]version.Version) {
 	if len(floors) == 0 {
 		return // --all-versions: nothing to be reachable from
@@ -342,28 +400,81 @@ func (g *Graph) pruneUnreachable(floors map[string]version.Version) {
 			base[p.ID] = true
 		}
 	}
+	via := dependencyProviders(base)
 
+	// Releases on a base edge first, then outward along the dependency chain until
+	// nothing new is reached. The chain is three products long, so this settles fast.
+	reachable := map[int]bool{}
 	for id, r := range g.Releases {
 		if base[r.ProductID] {
 			continue
 		}
-		reachable := false
 		for _, e := range g.Compat[id] {
 			peer := g.Releases[e.Peer]
 			if peer != nil && base[peer.ProductID] && Compatible(e.Status) {
-				reachable = true
+				reachable[id] = true
 				break
 			}
 		}
-		// VKS has no published ESX edges at all, so in practice its reachability comes
-		// through vCenter. That is fine — vCenter is the hub.
-		if !reachable {
-			g.Excluded[r.ProductID]++
-			delete(g.Releases, id)
+	}
+	for grew := true; grew; {
+		grew = false
+		for id, r := range g.Releases {
+			if base[r.ProductID] || reachable[id] || len(via[r.ProductID]) == 0 {
+				continue
+			}
+			for _, e := range g.Compat[id] {
+				peer := g.Releases[e.Peer]
+				if peer != nil && via[r.ProductID][peer.ProductID] && reachable[e.Peer] && Compatible(e.Status) {
+					reachable[id] = true
+					grew = true
+					break
+				}
+			}
 		}
 	}
 
+	for id, r := range g.Releases {
+		if base[r.ProductID] || reachable[id] {
+			continue
+		}
+		g.Excluded[r.ProductID]++
+		delete(g.Releases, id)
+	}
+
 	g.dropDanglingEdges()
+}
+
+// dependencyProviders maps a product to the non-base products it depends on, for the
+// products that depend on no base product at all. A product with a constraining edge
+// from ESX or vCenter is left out: the Supervisor, NSX, Avi and TMC Self-Managed each
+// answer to the base layer directly, and reaching one through a neighbour instead would
+// bring back releases that only ever ran on vSphere 7.
+func dependencyProviders(base map[int]bool) map[int]map[int]bool {
+	via := map[int]map[int]bool{}
+	onBase := map[int]bool{}
+	for _, e := range model.Edges {
+		if !e.Primary || e.Bidirectional {
+			continue
+		}
+		from, fromOK := model.ByKey(e.From)
+		to, toOK := model.ByKey(e.To)
+		if !fromOK || !toOK {
+			continue
+		}
+		if base[from.ID] {
+			onBase[to.ID] = true
+			continue
+		}
+		if via[to.ID] == nil {
+			via[to.ID] = map[int]bool{}
+		}
+		via[to.ID][from.ID] = true
+	}
+	for id := range onBase {
+		delete(via, id)
+	}
+	return via
 }
 
 // pruneToGeneration removes releases that cannot reach a surviving vCenter.
@@ -374,19 +485,28 @@ func (g *Graph) pruneUnreachable(floors map[string]version.Version) {
 // survive a pass that only asks about floor-less products. Here vCenter is the sole base
 // and everything else, ESX included, has to earn its place.
 //
-// One hop is enough: vCenter is the hub, and every other product publishes vCenter pairs.
-// A product that publishes none is left whole — an absent pair is not evidence of
-// incompatibility, and the stack already reports answers resting on one as inferred.
+// One hop is enough for the products that answer to vCenter directly. VKS and VKr do
+// not: VKS runs on the Supervisor and VKr is provisioned by VKS, so they are narrowed
+// through that chain instead, to whatever a surviving Supervisor can still run.
+//
+// A product that publishes no vCenter pair and has no chain to follow is left whole — an
+// absent pair is not evidence of incompatibility, and the stack already reports answers
+// resting on one as inferred.
 func (g *Graph) pruneToGeneration() {
 	vcenter, ok := model.ByKey("vcenter")
 	if !ok {
 		return
 	}
+	base := map[int]bool{vcenter.ID: true}
+	if esx, ok := model.ByKey("esx"); ok {
+		base[esx.ID] = true
+	}
+	via := dependencyProviders(base)
 
 	// Only judge a product upstream actually publishes against vCenter.
 	judged := map[int]bool{}
 	for _, p := range model.Products {
-		if p.ID != vcenter.ID && g.Coverage[pair(p.ID, vcenter.ID)] {
+		if p.ID != vcenter.ID && len(via[p.ID]) == 0 && g.Coverage[pair(p.ID, vcenter.ID)] {
 			judged[p.ID] = true
 		}
 	}
@@ -406,6 +526,29 @@ func (g *Graph) pruneToGeneration() {
 		if !reachable {
 			g.Excluded[r.ProductID]++
 			delete(g.Releases, id)
+		}
+	}
+
+	// Then the chain, to a fixed point: dropping a VKS release can strand a VKr one.
+	for shrank := true; shrank; {
+		shrank = false
+		for id, r := range g.Releases {
+			if len(via[r.ProductID]) == 0 {
+				continue
+			}
+			reachable := false
+			for _, e := range g.Compat[id] {
+				peer := g.Releases[e.Peer]
+				if peer != nil && via[r.ProductID][peer.ProductID] && Compatible(e.Status) {
+					reachable = true
+					break
+				}
+			}
+			if !reachable {
+				g.Excluded[r.ProductID]++
+				delete(g.Releases, id)
+				shrank = true
+			}
 		}
 	}
 
@@ -474,10 +617,11 @@ func productKeyList() string {
 }
 
 // Published reports whether upstream publishes compatibility data for a product pair.
-// Distinct from "nothing is compatible": eleven of the twenty-eight pairs in scope have no
-// data.
+// Distinct from "nothing is compatible": eleven of the twenty-six pairs in scope have no
+// data. A pair the model does not read is never published, whatever an older cache
+// recorded for it.
 func (g *Graph) Published(aProductID, bProductID int) bool {
-	return g.Coverage[pair(aProductID, bProductID)]
+	return model.InScope(aProductID, bProductID) && g.Coverage[pair(aProductID, bProductID)]
 }
 
 // ReleasesOf returns a product's releases, ascending by version.

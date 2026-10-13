@@ -27,8 +27,6 @@ flowchart TD
     ESX -->|"hosts run it"| SUPERVISOR
     SUPERVISOR -->|"runs"| VKS
     VKS -->|"provisions"| VKR
-    VCENTER -.->|"published directly"| VKS
-    VCENTER -.->|"published directly"| VKR
     SUPERVISOR -.->|"via VKS<br/><i>no published data</i>"| VKR
     VCENTER -->|"compute manager"| NSX
     ESX -.->|"published directly"| NSX
@@ -56,8 +54,6 @@ flowchart TD
 - **ESX → Supervisor** *(published in the matrix)* — The Supervisor control plane and its workloads run on the ESX hosts in the cluster, so the host version gates which Supervisor versions can be enabled.
 - **Supervisor → VKS** *(published in the matrix)* — VKS runs on top of the Supervisor and is what turns it into a service that can provision guest Kubernetes clusters.
 - **VKS → VKr** *(published in the matrix)* — VKS provisions guest clusters at a specific Kubernetes release; the VKS version declares the Kubernetes minor it serves (the "+v1.36" tail), which is what bounds the usable VKr versions.
-- **vCenter → VKS** *(published in the matrix)* — vCenter is the hub of the published matrix and has a direct compatibility edge to VKS, which is what makes it possible to solve a whole stack from a single pinned vCenter version. It is not a dependency, though: VKS runs on the Supervisor, so enforcing this pair would rule out combinations that work. It is looked up, never used to include or exclude.
-- **vCenter → VKr** *(published in the matrix)* — vCenter also has a direct published edge to VKr, giving a second independent reference point. Like the VKS pair it is not a dependency — VKr is provisioned by VKS — so it informs rather than constrains.
 - **Supervisor → VKr** *(inferred — upstream publishes nothing for this pair)* — There is no published Supervisor-to-VKr data upstream. The relationship is real but has to be inferred through VKS and vCenter, so this tool reports it as inferred rather than verified.
 - **vCenter → NSX** *(published in the matrix)* — NSX is optional — plenty of vSphere runs without it — but where it is deployed the NSX manager registers vCenter as a compute manager, and that pairing is versioned. Upstream publishes this pair directly.
 - **ESX → NSX** *(published in the matrix)* — NSX leans heavily on the ESX hosts: it prepares them as transport nodes, and the host version genuinely matters. Upstream publishes the pair, and it is still not enforced — not because the dependency is weak, but because the published grid is broad. It says yes to very nearly every combination the vCenter pair already allows, and vCenter and ESX move together in any case, so adding the host pair rules out nothing the vCenter pair does not while costing a great deal of search to discover that. NSX is constrained against vCenter, the Supervisor and Avi, and nothing else. This pair is looked up and reported.
@@ -72,9 +68,9 @@ flowchart TD
 
 ## Which pairs decide a stack
 
-Thirteen of the 18 relationships above are dependencies, and those alone decide whether a stack is valid: vCenter × ESX, vCenter × Supervisor, ESX × Supervisor, Supervisor × VKS, VKS × VKr, vCenter × NSX, NSX × Supervisor, vCenter × Avi, NSX × Avi, Avi × Supervisor, vCenter × TMC-SM, VKS × TMC-SM and VKr × TMC-SM.
+Thirteen of the 16 relationships above are dependencies, and those alone decide whether a stack is valid: vCenter × ESX, vCenter × Supervisor, ESX × Supervisor, Supervisor × VKS, VKS × VKr, vCenter × NSX, NSX × Supervisor, vCenter × Avi, NSX × Avi, Avi × Supervisor, vCenter × TMC-SM, VKS × TMC-SM and VKr × TMC-SM.
 
-The other five are looked up but never allowed to decide a stack: **vCenter × VKS**, **vCenter × VKr**, **Supervisor × VKr**, **ESX × NSX** and **ESX × Avi**. The reason differs by pair and is given with each relationship above. Some are not dependencies at all — VKr is provisioned by VKS, so a direct vCenter verdict on it decides nothing. Others are real dependencies that still constrain nothing in practice: NSX does prepare the ESX hosts as transport nodes, but that grid is nearly as permissive as the vCenter one and the two move together, so enforcing it rules out nothing the vCenter pair has not already ruled out. ESX × Avi is the opposite shape — almost every cell is empty, so enforcing it would collapse every Avi-bearing stack rather than narrow it.
+The other three are looked up but never allowed to decide a stack: **Supervisor × VKr**, **ESX × NSX** and **ESX × Avi**. The reason differs by pair and is given with each relationship above. Some are not dependencies at all — VKr is provisioned by VKS, so nothing has to hold between it and the Supervisor. Others are real dependencies that still constrain nothing in practice: NSX does prepare the ESX hosts as transport nodes, but that grid is nearly as permissive as the vCenter one and the two move together, so enforcing it rules out nothing the vCenter pair has not already ruled out. ESX × Avi is the opposite shape — almost every cell is empty, so enforcing it would collapse every Avi-bearing stack rather than narrow it.
 
 Upstream publishes all of them but Supervisor × VKr, which has no data at all, and marks some combinations NOT SUPPORTED that this tool will still recommend. That is expected rather than a contradiction: VKr 1.32.10, for one, is published against vCenter 9.0.0.0 but not 8.0U3, while VKr 1.32.7 covers both — even though VKS 3.3.3 serves either one and nothing in the dependency chain differs. `vkstack stack` therefore reports the dependency chain and nothing else. To see a non-dependency pair as upstream publishes it, ask for it directly with `vkstack compat` or name the whole combination with `vkstack check`; both report every published pair.
 
@@ -174,7 +170,7 @@ The interoperability matrix returns nothing at all for Supervisor against VKr �
 
 *What it means:* This is the gap that matters. It is a question people genuinely ask, and there is no direct answer to look up.
 
-*What to do:* This tool answers it indirectly: VKS sits between them and is published against both, and vCenter is published against both, so a combination that satisfies those is reported — always labelled inferred, never as verified compatible.
+*What to do:* This tool answers it indirectly: VKS sits between them and is published against both, so a combination that satisfies those is reported — always labelled inferred, never as verified compatible.
 
 ### Supervisor × TMC-SM is not published
 

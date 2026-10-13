@@ -44,8 +44,8 @@ func Unknowns(covered Coverage) []Unknown {
 			u.Consequence = "This is the gap that matters. It is a question people genuinely " +
 				"ask, and there is no direct answer to look up."
 			u.Workaround = "This tool answers it indirectly: VKS sits between them and is " +
-				"published against both, and vCenter is published against both, so a " +
-				"combination that satisfies those is reported — always labelled inferred, " +
+				"published against both, so a combination that satisfies those is " +
+				"reported — always labelled inferred, " +
 				"never as verified compatible."
 		default:
 			u.Consequence = "In practice this costs nothing: it is not a combination anyone " +

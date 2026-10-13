@@ -216,11 +216,12 @@ Call `vkstack explain` (schema `vkstack.model`) once and keep it in context. It 
 the six things most likely to produce a confidently wrong conclusion:
 
 1. **Only real dependencies constrain a stack.** The chain is
-   `VKr → VKS → Supervisor → vCenter ↔ ESX`. The matrix *also* publishes vCenter against
-   VKS, vCenter against VKr, and ESX against Avi, and those are **not** dependencies —
-   VKS runs on the Supervisor, VKr is provisioned by VKS, Avi is placed through vCenter.
-   They are reported, never enforced. Enforcing them produces combinations listed as
-   compatible that cannot exist, and rules out combinations that work.
+   `VKr → VKS → Supervisor → vCenter ↔ ESX`. vCenter has **no** pairing with VKS or with
+   VKr: VKS runs on the Supervisor and VKr is provisioned by VKS, so the tool does not
+   read, enforce or report either pair, and upstream is removing both from the matrix.
+   Do not check a VKS or VKr version against vCenter yourself. ESX against Avi *is*
+   published and is **not** a dependency either — Avi is placed through vCenter — so it
+   is reported, never enforced.
 2. **NSX, Avi and TMC Self-Managed are optional, and independent of each other.** None is
    in a solved stack unless it is pinned or named in `stack --with` / the MCP `include`
    array. For the networking pair all four combinations are real deployments: neither, NSX
@@ -234,7 +235,7 @@ the six things most likely to produce a confidently wrong conclusion:
    cells in the whole grid say yes, all of them Avi 32.1.1 against ESX 9.1.x. It is not a
    dependency and is never enforced. If you enforce it yourself you will reject Avi
    deployments that plainly work.
-4. **Eleven of the twenty-eight product pairs have no upstream data at all** (ESX×VKS,
+4. **Eleven of the twenty-six product pairs the tool reads have no upstream data at all** (ESX×VKS,
    ESX×VKr, Supervisor×VKr, NSX×VKS, NSX×VKr, Avi×VKS, Avi×VKr, and TMC-SM against ESX,
    NSX, Avi and the Supervisor). "No data published" is not "incompatible", and the tool
    never reports a stack as verified on a pair nobody published. Do not fill that gap with

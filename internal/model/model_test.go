@@ -66,7 +66,7 @@ func TestUpgradeOrderIsTotal(t *testing.T) {
 
 func TestPairsCoversEveryCombination(t *testing.T) {
 	pairs := Pairs()
-	want := len(Products) * (len(Products) - 1) / 2
+	want := len(Products)*(len(Products)-1)/2 - len(outOfScope)
 	if len(pairs) != want {
 		t.Errorf("got %d pairs, want %d", len(pairs), want)
 	}

@@ -93,7 +93,7 @@ type StackFailure struct {
 // Products are filled in most-constrained-first order (the Kubernetes chain before the
 // base layer), and a partial assignment is abandoned as soon as any *published* pair
 // against an already-assigned product is not compatible. Unpublished pairs — eleven of
-// the twenty-eight — cannot constrain anything, so they are skipped during the search and
+// the twenty-six — cannot constrain anything, so they are skipped during the search and
 // reported afterwards as inferred.
 //
 // Optional products take part only when pinned or named in opts.Include, and each is
@@ -257,8 +257,8 @@ func (g *Graph) consistent(r *Release, assigned map[int]*Release) bool {
 		if otherID == r.ProductID {
 			continue
 		}
-		// Only real dependencies constrain a stack. vCenter against VKS is published
-		// but is not a dependency, and enforcing it rules out combinations that work.
+		// Only real dependencies constrain a stack. ESX against Avi is published but
+		// is not one, and enforcing it rules out combinations that work.
 		if !model.Constrains(r.ProductID, otherID) || !g.Published(r.ProductID, otherID) {
 			continue
 		}

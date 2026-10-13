@@ -127,7 +127,7 @@ func TestRequiredProductsAlwaysPresent(t *testing.T) {
 	g := realGraph(t)
 	eachPin(t, g, nil, func(t *testing.T, p model.Product, r *Release, s Stack) {
 		for _, want := range model.Products {
-			if want.Key == "nsx" || want.Key == "avi" {
+			if want.Optional {
 				continue
 			}
 			if _, ok := s.Releases[want.ID]; !ok {
@@ -307,8 +307,6 @@ func TestRecommendationPrefersTheNewestPlatform(t *testing.T) {
 // than pass silently.
 func TestConstraintSetMatchesTheDocumentedOne(t *testing.T) {
 	unconstrained := map[string]bool{
-		"vcenter×vks":    true,
-		"vcenter×vkr":    true,
 		"supervisor×vkr": true,
 		"esx×nsx":        true,
 		"esx×avi":        true,
@@ -324,8 +322,8 @@ func TestConstraintSetMatchesTheDocumentedOne(t *testing.T) {
 				name, got, want)
 		}
 	}
-	if len(model.Edges) != 18 {
-		t.Errorf("edge count is %d, was 18 — a new relationship needs a constraint decision",
+	if len(model.Edges) != 16 {
+		t.Errorf("edge count is %d, was 16 — a new relationship needs a constraint decision",
 			len(model.Edges))
 	}
 }

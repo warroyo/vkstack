@@ -336,20 +336,18 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-// Only real dependencies may invalidate a stack. The matrix publishes vCenter against
-// VKS, but VKS runs on the Supervisor — so a mismatch on that pair says nothing about
-// whether the stack works, and must not rule the VKS version out.
-func TestNonDependencyPairsAreNotEnforced(t *testing.T) {
+// vCenter has no version relationship with VKS: VKS runs on the Supervisor. The matrix
+// has carried the pair anyway, and a cache written by an older build still holds it, so
+// loading must drop it — it may not rule a VKS version out, and it may not be reported.
+func TestVCenterVKSPairIsNotRead(t *testing.T) {
 	snap := fixture()
-	// A newer VKS that the Supervisor supports, explicitly NOT supported against the
-	// new-generation vCenter. Kept reachable through the old vCenter so the version
-	// floor does not simply drop it.
+	// A newer VKS that the Supervisor supports, with a stale row saying the
+	// new-generation vCenter does not.
 	snap.Releases = append(snap.Releases, store.Release{
 		ID: 43, ProductID: vks, HybridVersion: "3.8.0+v1.37", ReleaseType: "Minor", GADate: 1,
 	})
 	snap.Compat = append(snap.Compat,
 		store.Compat{ARelease: 21, BRelease: 43, Status: store.StatusNotSupported},
-		store.Compat{ARelease: 22, BRelease: 43, Status: store.StatusCompatible},
 		store.Compat{ARelease: 31, BRelease: 43, Status: store.StatusCompatible},
 		store.Compat{ARelease: 43, BRelease: 51, Status: store.StatusCompatible},
 	)
@@ -361,31 +359,84 @@ func TestNonDependencyPairsAreNotEnforced(t *testing.T) {
 	if g.Releases[43] == nil {
 		t.Fatal("fixture VKS 43 was pruned; the test cannot say anything")
 	}
+	for _, e := range g.Compat[43] {
+		if g.Releases[e.Peer].ProductID == vc {
+			t.Errorf("loaded a vCenter edge for VKS 43 (peer %d); the pair is out of scope", e.Peer)
+		}
+	}
 
 	pins := map[int]*Release{vc: g.Releases[21]}
 	stacks, failure := g.Stacks(pins, StackOptions{Limit: 1})
 	if len(stacks) == 0 {
 		t.Fatalf("expected a stack, got %+v", failure)
 	}
-	// VKS 43 is the newest the Supervisor supports. The vCenter pair says "not
-	// supported", but that pair is not a dependency, so it must not exclude it.
+	// VKS 43 is the newest the Supervisor supports.
 	if got := stacks[0].Releases[vks].ID; got != 43 {
-		t.Errorf("chose VKS %d; the non-dependency vCenter pair should not have excluded 43", got)
+		t.Errorf("chose VKS %d; the stale vCenter row should not have excluded 43", got)
 	}
 
-	// Still reported, never enforced.
-	res := g.Check(stacks[0].Releases)
-	if !res.OK() {
-		t.Errorf("stack must pass; failing pairs are not dependencies: %+v", res.Incompatible())
+	if g.Published(vc, vks) {
+		t.Error("vCenter × VKS reported as published; the pair is out of scope")
 	}
-	var sawIt bool
-	for _, v := range res.Informational() {
-		if v.A.Key == "vcenter" && v.B.Key == "vks" && !Compatible(v.Status) {
-			sawIt = true
+	for _, grp := range g.CompatibleWith(g.Releases[43], CompatOptions{}) {
+		if grp.Product.ID == vc {
+			t.Error("compat for a VKS release carries a vCenter group; there is no such pairing")
 		}
 	}
-	if !sawIt {
-		t.Error("expected the non-dependency mismatch reported as informational")
+
+	res := g.Check(stacks[0].Releases)
+	if !res.OK() {
+		t.Errorf("stack must pass: %+v", res.Incompatible())
+	}
+	for _, v := range res.Pairs {
+		keys := map[string]bool{v.A.Key: true, v.B.Key: true}
+		if keys["vcenter"] && (keys["vks"] || keys["vkr"]) {
+			t.Errorf("check reported %s × %s; vCenter is not paired with VKS or VKr", v.A.Key, v.B.Key)
+		}
+	}
+}
+
+// The floor decides what exists at all, and it has to ask the same way. Upstream listed
+// VKS 3.0.0 against sixteen supported Supervisors and "not supported" against every
+// vCenter. VKS runs on the Supervisor, so that is a release with somewhere to run;
+// asking vCenter about it hid it from every command.
+func TestReachabilityFollowsDependencies(t *testing.T) {
+	snap := fixture()
+	snap.Releases = append(snap.Releases,
+		// On a surviving Supervisor, refused by every vCenter.
+		store.Release{ID: 43, ProductID: vks, HybridVersion: "3.0.0", ReleaseType: "Major", GADate: 1},
+		// Reachable only through 43, with no vCenter pair of its own.
+		store.Release{ID: 53, ProductID: vkr, HybridVersion: "1.29.4", ReleaseType: "Minor", GADate: 1},
+		// A Supervisor no surviving vCenter or ESX takes, and the VKS that needs it.
+		store.Release{ID: 39, ProductID: sup, HybridVersion: "v1.24.0+vmware.1", ReleaseType: "Minor", GADate: 1},
+		store.Release{ID: 49, ProductID: vks, HybridVersion: "2.2.0", ReleaseType: "Minor", GADate: 1},
+	)
+	snap.Compat = append(snap.Compat,
+		store.Compat{ARelease: 21, BRelease: 43, Status: store.StatusNotSupported},
+		store.Compat{ARelease: 22, BRelease: 43, Status: store.StatusNotSupported},
+		store.Compat{ARelease: 32, BRelease: 43, Status: store.StatusCompatible},
+		store.Compat{ARelease: 43, BRelease: 53, Status: store.StatusCompatible},
+		store.Compat{ARelease: 39, BRelease: 49, Status: store.StatusCompatible},
+		// 39 pairs with a live VKS too. That must not rescue it: the Supervisor answers
+		// to vCenter and ESX, not to what runs on top of it.
+		store.Compat{ARelease: 39, BRelease: 42, Status: store.StatusCompatible},
+	)
+
+	g, err := Load(snap, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if g.Releases[43] == nil {
+		t.Error("VKS 43 was pruned; a supported Supervisor runs it and the vCenter pair is not a dependency")
+	}
+	if g.Releases[53] == nil {
+		t.Error("VKr 53 was pruned; VKS 43 provisions it and VKr answers to VKS alone")
+	}
+	if g.Releases[39] != nil {
+		t.Error("Supervisor 39 survived through a VKS pair; it has no vCenter or ESX to run on")
+	}
+	if g.Releases[49] != nil {
+		t.Error("VKS 49 survived; its only Supervisor was pruned")
 	}
 }
 

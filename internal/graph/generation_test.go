@@ -38,6 +38,11 @@ func TestGenerationFiltersOnlyVCenter(t *testing.T) {
 				if p.ID == vcenter.ID {
 					continue
 				}
+				// Upstream lists no TMC Self-Managed release against any vCenter 9, and
+				// TMC-SM does answer to vCenter, so an empty layer there is the data.
+				if p.Key == "tmc" && gen == 9 {
+					continue
+				}
 				if len(g.ReleasesOf(p.ID)) == 0 {
 					t.Errorf("generation %d left no %s releases", gen, p.Label)
 				}
@@ -79,24 +84,31 @@ func TestGenerationDropsWhatCannotReachIt(t *testing.T) {
 	}
 
 	vcenter, _ := model.ByKey("vcenter")
+	esx, _ := model.ByKey("esx")
+	via := dependencyProviders(map[int]bool{vcenter.ID: true, esx.ID: true})
 	for id, r := range nine.Releases {
 		if r.ProductID == vcenter.ID {
 			continue
 		}
-		// Anything that survived and is judged against vCenter must have a live pair.
-		if !nine.Coverage[pair(r.ProductID, vcenter.ID)] {
+		// VKS and VKr are judged through what they run on, not through vCenter.
+		providers := via[r.ProductID]
+		// Anything else that survived and is judged against vCenter must have a live pair.
+		if len(providers) == 0 && !nine.Coverage[pair(r.ProductID, vcenter.ID)] {
 			continue
 		}
 		reachable := false
 		for _, e := range nine.Compat[id] {
 			peer := nine.Releases[e.Peer]
-			if peer != nil && peer.ProductID == vcenter.ID && Compatible(e.Status) {
+			if peer == nil || !Compatible(e.Status) {
+				continue
+			}
+			if providers[peer.ProductID] || (len(providers) == 0 && peer.ProductID == vcenter.ID) {
 				reachable = true
 				break
 			}
 		}
 		if !reachable {
-			t.Errorf("%s %s survived generation 9 with no compatible vCenter 9 release",
+			t.Errorf("%s %s survived generation 9 with nothing compatible under it",
 				r.ProductKey, r.Raw)
 		}
 	}

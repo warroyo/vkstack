@@ -184,14 +184,18 @@ leaves Avi closed, and Avi in front of a distributed switch with no NSX anywhere
 ordinary deployment. TMC Self-Managed differs from the networking pair in one way: it is
 a genuine dependency, versioned against vCenter, VKS and VKr and enforced when opened.
 
-The matrix also publishes vCenter against VKS, vCenter against VKr, and ESX against Avi.
-Those are worth looking up, but they are not dependencies, because VKS runs on the
-Supervisor, VKr is provisioned by VKS, and Avi's service engines are placed through
-vCenter, so they are reported and never enforced. Enforcing them produces combinations
-that are listed compatible yet cannot exist: vCenter 9.0.0.0 and VKS 3.7 are listed
-together, but vCenter 9.0.0.0 tops out at Supervisor 1.30 while VKS 3.7 needs 1.32, so
-there is no Supervisor to put in the middle. ESX × Avi fails the other way: the grid is
-so nearly empty that enforcing it would leave one legal combination.
+vCenter has no pairing with VKS or with VKr. VKS runs on the Supervisor and VKr is
+provisioned by VKS, so neither has to be worked out against vCenter, and the tool does
+not read, enforce or report either pair. The matrix has carried both and is dropping
+them; what they said could not be trusted either way. vCenter 9.0.0.0 and VKS 3.7 were
+listed together, but vCenter 9.0.0.0 tops out at Supervisor 1.30 while VKS 3.7 needs
+1.32, so there is no Supervisor to put in the middle. VKS 3.0.0 was the reverse: "not
+supported" against every vCenter, with sixteen supported Supervisors that run it.
+
+The matrix also publishes ESX against Avi. It is worth looking up, but it is not a
+dependency, because Avi's service engines are placed through vCenter, so it is reported
+and never enforced. The grid is so nearly empty that enforcing it would leave one legal
+combination.
 
 A node is lit when a complete valid stack exists containing it and your selection,
 enforcing the chain above. `vkstack check` reports the non-dependency pairs separately,
@@ -258,7 +262,11 @@ The rules, in order:
 3. End of general support passed otherwise → Technical Guidance. vSphere's technical
    guidance is real and long (8.x ends general support 2027-10-11 and technical guidance
    only in 2029), so an absent date must not be read as "dead".
-4. Nothing published → the matrix flags, unchanged.
+4. Nothing published, and a newer release of the same product is already past general
+   support on a published date → that release's phase, with `phaseSource` `inferred`.
+   Support ends in release order: VKS 3.0.0 has no lifecycle row and the matrix still
+   flags it as supported, while 3.1.0 ended general support on 2025-09-28.
+5. Nothing published otherwise → the matrix flags, unchanged.
 
 A release the matrix has already retired stays retired, whatever the dates say.
 
@@ -423,12 +431,12 @@ vkstack stack vcenter 9.1.0.0300 --with tmc        # TMC Self-Managed on top
 
 In the web UI they are two collapsed rows you open one at a time.
 
-Eleven of the twenty-eight product pairs have no upstream data. ESX × VKS, ESX × VKr,
+Eleven of the twenty-six product pairs the tool reads have no upstream data. ESX × VKS, ESX × VKr,
 Supervisor × VKr, NSX and Avi each against VKS and VKr, and TMC-SM against ESX, NSX, Avi
 and the Supervisor return nothing at all. So
 "compatible", "incompatible" and "no data published" are kept distinct everywhere, and a
 stack is never reported as verified on a pair that was never published. The
-Supervisor × VKr gap is the one that matters, and it is inferred through vCenter and VKS.
+Supervisor × VKr gap is the one that matters, and it is inferred through VKS.
 
 One published pair is deliberately never enforced: ESX × Avi exists upstream but is
 nearly empty: three cells in the whole grid say yes. Avi's service engines are placed

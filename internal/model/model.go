@@ -333,10 +333,6 @@ type Edge struct {
 	// Primary marks the pairs that constrain a solve. It is the constraint set, not a
 	// claim about which relationships are real, and the two are not the same question.
 	//
-	// Most non-primary pairs are not dependencies at all: the matrix publishes vCenter
-	// against VKS and against VKr, but VKS runs on the Supervisor, so enforcing those
-	// produces combinations that are listed compatible yet cannot exist.
-	//
 	// ESX × NSX is the case that shows why the flag means enforcement rather than
 	// dependency. NSX leans heavily on the hosts it prepares as transport nodes — a real
 	// dependency by any reading — but its published grid is nearly as permissive as the
@@ -394,24 +390,6 @@ var Edges = []Edge{
 			"version declares the Kubernetes minor it serves (the \"+v1.36\" tail), which " +
 			"is what bounds the usable VKr versions.",
 		Primary: true, Evidence: EvidencePublished,
-	},
-	{
-		From: "vcenter", To: "vks", Label: "published directly",
-		Summary: "Published, but not a dependency — VKS runs on the Supervisor.",
-		Prose: "vCenter is the hub of the published matrix and has a direct compatibility " +
-			"edge to VKS, which is what makes it possible to solve a whole stack from a " +
-			"single pinned vCenter version. It is not a dependency, though: VKS runs on " +
-			"the Supervisor, so enforcing this pair would rule out combinations that " +
-			"work. It is looked up, never used to include or exclude.",
-		Evidence: EvidencePublished,
-	},
-	{
-		From: "vcenter", To: "vkr", Label: "published directly",
-		Summary: "Published, but not a dependency — VKr comes from VKS.",
-		Prose: "vCenter also has a direct published edge to VKr, giving a second " +
-			"independent reference point. Like the VKS pair it is not a dependency — VKr " +
-			"is provisioned by VKS — so it informs rather than constrains.",
-		Evidence: EvidencePublished,
 	},
 	{
 		From: "supervisor", To: "vkr", Label: "via VKS",
@@ -528,6 +506,7 @@ var (
 	byKey        map[string]Product
 	byID         map[int]Product
 	constrainsBy map[[2]int]bool
+	outOfScopeBy map[[2]int]bool
 )
 
 func init() {
@@ -536,6 +515,11 @@ func init() {
 	for _, p := range Products {
 		byKey[p.Key] = p
 		byID[p.ID] = p
+	}
+
+	outOfScopeBy = make(map[[2]int]bool)
+	for _, pr := range outOfScope {
+		outOfScopeBy[orderedIDs(byKey[pr[0]].ID, byKey[pr[1]].ID)] = true
 	}
 
 	constrainsBy = make(map[[2]int]bool)
@@ -563,9 +547,9 @@ func orderedIDs(a, b int) [2]int {
 //
 // This is deliberately not the same as "is a real dependency". ESX × NSX is a real
 // dependency that does not constrain, because its published grid is broad enough to rule
-// out nothing the vCenter pair does not. vCenter × VKS is the other way round: published,
-// enforceable-looking, and not a dependency at all. Both are looked up and reported; only
-// the pairs marked Primary include or exclude anything.
+// out nothing the vCenter pair does not. It is looked up and reported; only the pairs
+// marked Primary include or exclude anything. A pair that is no relationship at all is a
+// different thing again, and is not read in the first place — see outOfScope.
 func Constrains(aProductID, bProductID int) bool {
 	return constrainsBy[orderedIDs(aProductID, bProductID)]
 }
@@ -591,8 +575,27 @@ func IDs() []int {
 	return ids
 }
 
-// Pairs returns every unordered product-id pair, with the lower id first. These are the
-// twenty-eight pairs `refresh` probes and `pair_coverage` records.
+// outOfScope is the pairs this tool does not read at all, by product key.
+//
+// vCenter has no version relationship with VKS or with VKr: VKS runs on the Supervisor
+// and VKr is provisioned by VKS, so neither has to be worked out against vCenter. The
+// matrix has carried both pairs anyway and upstream is removing them. They used to be
+// mirrored and reported as informational; what they said was noise at best — VKS 3.0.0
+// was listed "not supported" against every vCenter while sixteen supported Supervisors
+// ran it — so they are not fetched, not loaded from an older cache, and not reported.
+var outOfScope = [][2]string{
+	{"vcenter", "vks"},
+	{"vcenter", "vkr"},
+}
+
+// InScope reports whether a product pair is one the tool reads. See outOfScope.
+func InScope(aProductID, bProductID int) bool {
+	return !outOfScopeBy[orderedIDs(aProductID, bProductID)]
+}
+
+// Pairs returns every unordered product-id pair in scope, with the lower id first. These
+// are the twenty-six pairs `refresh` probes and `pair_coverage` records: all twenty-eight
+// combinations of the eight products, less the two in outOfScope.
 //
 // Optional products are included: whether a deployment has NSX or Avi is a question for
 // the solver, not for the mirror, and the cache stays a dumb copy of upstream.
@@ -604,6 +607,9 @@ func Pairs() [][2]int {
 			a, b := ids[i], ids[j]
 			if a > b {
 				a, b = b, a
+			}
+			if !InScope(a, b) {
+				continue
 			}
 			out = append(out, [2]int{a, b})
 		}

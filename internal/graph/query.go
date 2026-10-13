@@ -140,7 +140,9 @@ func (g *Graph) CompatibleWith(r *Release, opts CompatOptions) []CompatGroup {
 
 	var out []CompatGroup
 	for _, p := range model.Products {
-		if p.ID == r.ProductID {
+		// No group for a product this one has no pairing with: an empty vCenter group
+		// under VKS would read as "nothing compatible" or "no data", and it is neither.
+		if p.ID == r.ProductID || !model.InScope(r.ProductID, p.ID) {
 			continue
 		}
 		group := CompatGroup{
@@ -160,7 +162,7 @@ func (g *Graph) CompatibleWith(r *Release, opts CompatOptions) []CompatGroup {
 // PairVerdict is the compatibility outcome for one product pair in a stack.
 type PairVerdict struct {
 	// Constrains is false for pairs that are looked up but never allowed to decide a
-	// stack — whether because they are not dependencies (vCenter × VKr) or because they
+	// stack — whether because they are not dependencies (Supervisor × VKr) or because they
 	// are dependencies whose published grid rules out nothing (ESX × NSX). See
 	// model.Constrains.
 	Constrains bool
@@ -189,8 +191,8 @@ type CheckResult struct {
 
 // Incompatible returns the constraining pairs that actively fail.
 //
-// Pairs outside the constraint set are excluded: vCenter against VKS is published but VKS
-// does not run on vCenter, so a mismatch there says nothing about whether the stack works.
+// Pairs outside the constraint set are excluded: ESX against Avi is published but Avi is
+// placed through vCenter, so a mismatch there says nothing about whether the stack works.
 func (c CheckResult) Incompatible() []PairVerdict {
 	var out []PairVerdict
 	for _, p := range c.Pairs {
@@ -211,7 +213,7 @@ func (c CheckResult) Incompatible() []PairVerdict {
 // and the map lit peers a release was never published against.
 //
 // Unverified pairs whose *product pair* upstream does not publish at all are a different
-// thing and still pass: eleven of the twenty-eight have no data by design.
+// thing and still pass: eleven of the twenty-six have no data by design.
 func (c CheckResult) Blocking() []PairVerdict {
 	var out []PairVerdict
 	for _, p := range c.Pairs {
@@ -246,7 +248,7 @@ func (c CheckResult) Unverified() []PairVerdict {
 }
 
 // OK reports whether nothing actively fails. Unverified pairs are a warning, not a
-// failure — eleven of the twenty-eight pairs have no upstream data by design.
+// failure — eleven of the twenty-six pairs have no upstream data by design.
 func (c CheckResult) OK() bool { return len(c.Incompatible()) == 0 }
 
 // Check validates every pair of a pinned stack, keyed by product id.

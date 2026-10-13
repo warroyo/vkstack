@@ -208,7 +208,8 @@ type mapNode struct {
 	// Legacy marks a node with nothing left in General Support.
 	Legacy bool `json:"legacy,omitempty"`
 	// PhaseSource is "lifecycle" when a published date, rather than the matrix flags,
-	// is what retired this node. It matters for the wording: the interop site's "hide
+	// is what retired this node, and "inferred" when nothing is published for it and a
+	// newer release's published date is what did. It matters for the wording: the interop site's "hide
 	// legacy releases" checkbox does *not* remove these — the matrix still lists VKr
 	// 1.32 as generally supported months after its published end of general support.
 	PhaseSource string `json:"phaseSource,omitempty"`

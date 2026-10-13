@@ -27,7 +27,7 @@ If the MCP server isn't connected, the same operations exist on the `vkstack` CL
 ## Data sources: what to use and what to ignore
 
 - **Use:** vkstack, Broadcom TechDocs release notes, Broadcom KB articles, and the user's own operational knowledge (label it as such).
-- **Ignore the VCF Upgrade Planner and its output.** The interop matrix is taking over that data, including older VKS releases such as 3.0.0. If a user pastes Upgrade Planner output, you can compare against it, but don't take versions or orderings from it. If the matrix lacks a version, say so and check the release notes instead.
+- **Ignore the VCF Upgrade Planner and its output.** The interop matrix has taken over that data, including older VKS releases: VKS 3.0.0 is listed, so pin it directly rather than a stand-in. If a user pastes Upgrade Planner output, you can compare against it, but don't take versions or orderings from it. If the matrix lacks a version, say so and check the release notes instead.
 
 ## Workflow
 
@@ -43,12 +43,13 @@ Versions resolve by exact match, then unique prefix. User-supplied strings often
 
 - **Supervisor:** drop the trailing build number. `v1.28.3+vmware.2-fips.1-vsc0.1.9-23905380` becomes `v1.28.3+vmware.2-fips.1-vsc0.1.9`.
 - **VKr/TKr:** older releases carry labels. `v1.28.8+vmware.1-fips.1` becomes `1.28.8 (TKr 1.28.8 for vSphere 8.x)`. Find them with `vkstack_releases` using `product: "vkr"` and `legacy: true`.
-- **Not in the matrix** (for example Avi 22.1.6 or VKS 3.0.0): use the nearest listed release as a stand-in only with the user's agreement, and flag the assumption everywhere it matters. Never invent pairs.
+- **Old VKS:** releases past general support, such as VKS 3.0.0, are hidden from `vkstack_releases` unless `legacy: true` is set. They still pin and solve normally.
+- **Not in the matrix** (for example Avi 22.1.6): use the nearest listed release as a stand-in only with the user's agreement, and flag the assumption everywhere it matters. Never invent pairs.
 - **Never set `hidePatches`.** Patch letters decide answers: vCenter 8.0U3 takes Supervisor 1.26–1.28, 8.0U3g up to 1.30, 8.0U3i up to 1.32.
 
 ### 3. Solve the target
 
-Call `vkstack_stack` with the target pinned (usually the target vCenter), and put each optional product the user runs in `include` (`avi`, `nsx`, `tmc`). Note which target builds are forced. For example, vCenter 9.1.1.0 takes only Avi 32.1.3/32.1.4 and lists Supervisor v1.33.13 vsc9.1.1.0, not 1.34.9.
+Call `vkstack_stack` with the target pinned (usually the target vCenter), and put each optional product the user runs in `include` (`avi`, `nsx`, `tmc`). Note which target builds are forced. For example, with Avi included vCenter 9.1.1.0 takes only Avi 32.1.3: 32.1.4 is listed against that vCenter but against no Supervisor, so no stack can hold it. Read the forced builds from the result each time; these move as upstream publishes.
 
 ### 4. Map the gates with windows
 
@@ -86,10 +87,10 @@ A hand-built path is valid but not guaranteed shortest. Say so if the user asks 
 ### 6. Layer ESX, VKS and guest clusters (VKr) onto the backbone
 
 - **Guest clusters (VKr) are constrained by VKS alone.** VKr is provisioned by VKS, so VKS × VKr is the only pair that matters for clusters. Bump VKr one Kubernetes minor at a time, keeping each version inside the running VKS's window. Supervisor × VKr is unpublished and is not a dependency; don't tie cluster versions to the Supervisor's own Kubernetes minor.
-- **Plan the guest clusters as one round.** Because VKr depends only on VKS, the cluster work (VKr bumps plus the VKS hops they need) can be done as one contiguous block: clusters up to the next VKS's floor, the VKS hop, then clusters on to the target. Place that round in the single numbered sequence, not on a parallel track. Find its **gate** and **deadline**. The gate is the earliest infrastructure step a VKS hop needs, e.g. VKS 3.6.3 needs Supervisor ≥ 1.30. The deadline is the last infrastructure step before which a VKS hop must be done, because the old VKS doesn't pair with the next Supervisor, e.g. VKS 3.3.3 doesn't pair with vsc9. Put the round right after the gate, and say it can slide anywhere up to the deadline so app teams can test on their own schedule. Verify the round with `vkstack_check` at both ends of that window. Running it early gets VKS and clusters onto supported releases sooner.
+- **Plan the guest clusters as one round.** Because VKr depends only on VKS, the cluster work (VKr bumps plus the VKS hops they need) can be done as one contiguous block: clusters up to the next VKS's floor, the VKS hop, then clusters on to the target. Place that round in the single numbered sequence, not on a parallel track. Find its **gate** and **deadline**. The gate is the earliest infrastructure step a VKS hop needs, e.g. VKS 3.6.3 needs Supervisor ≥ 1.30. The deadline is the last infrastructure step before which a VKS hop must be done, because the old VKS doesn't pair with the next Supervisor, e.g. VKS 3.3.3 pairs with vsc0 and vsc9.0 Supervisors but with no vsc9.1 one. Put the round right after the gate, and say it can slide anywhere up to the deadline so app teams can test on their own schedule. Verify the round with `vkstack_check` at both ends of that window. Running it early gets VKS and clusters onto supported releases sooner.
 - **VKS moves when the next VKr or Supervisor step needs it.** Check the VKS window (pin the Supervisor and the VKr), then the VKS release notes for upgrade prerequisites. For example, VKS 3.6 needs VKS ≥ 3.3 installed, all clusters on VKr ≥ 1.32, and Supervisor ≥ 1.30.
-- **ESX follows vCenter, but check its window.** ESX 8.0U3g and later drop old vsc0 Supervisors (below 1.30/vsc0.1.13), so holding ESX on 8.0U3 while the Supervisor climbs is often necessary. ESX 8 pairs only with vsc0 Supervisors, and ESX 9 only with vsc9.
-- **8.x → 9.x order: Supervisor to vsc9 first, then ESX to 9.x.** Broadcom's 9.1 upgrade order is vCenter → VKS → Supervisor → ESX. The state in between (ESX 8 + vsc9 Supervisor) fails `vkstack_check`, because the matrix has no such pairs. Mark it **transitional**, not incompatible, and split it into two steps (e.g. 15a/15b).
+- **ESX follows vCenter, but check its window.** ESX 8.0U3g and later drop old vsc0 Supervisors (below 1.30/vsc0.1.13), so holding ESX on 8.0U3 while the Supervisor climbs is often necessary. ESX 8.0U3g and later pair only with vsc0 Supervisors, and ESX 9 only with vsc9. Base ESX 8.0U3 also lists a few vsc9.0.0.x Supervisors, and none on vsc9.1.
+- **8.x → 9.x order: Supervisor to vsc9 first, then ESX to 9.x.** Broadcom's 9.1 upgrade order is vCenter → VKS → Supervisor → ESX. The state in between (ESX 8 + vsc9.1 Supervisor) fails `vkstack_check`, because the matrix has no such pairs; `vkstack_path` allows it and flags the step `transitional`. Mark it **transitional**, not incompatible, and split it into two steps (e.g. 15a/15b).
 
 ### 7. Validate every state
 
@@ -97,7 +98,7 @@ Call `vkstack_check` once per step, pinning the **full** stack after that step (
 
 - **Any enforced pair failing** (`dependency: true`, status not 1 or 3): the plan is wrong, unless this is the marked transitional step. Fix the plan; don't paper over it.
 - **"Compatible, not tested"** (status 3): list these pairs with their steps in the plan.
-- **Informational no** (`dependency: false`, e.g. vCenter × VKr): mention it, but don't let it drive the order. ESX × Avi is near-empty upstream; ignore it.
+- **Informational no** (`dependency: false`, e.g. ESX × NSX): mention it, but don't let it drive the order. ESX × Avi is near-empty upstream; ignore it.
 - **Unpublished pairs** (e.g. Supervisor × VKr) aren't failures, and they aren't dependencies either. Don't invent a constraint to fill the gap.
 
 An incompatible state is an answer, not a malfunction: read the payload.

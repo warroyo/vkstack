@@ -316,9 +316,11 @@ func mcpTools() []map[string]any {
 				"VKS alone. Optional products " +
 				"take part only when pinned on both sides, and usually decide the route. The " +
 				"ESX 8 with vsc9 Supervisor state is flagged transitional: the vSphere 8 to 9 " +
-				"upgrade order (vCenter, VKS, Supervisor, ESX) passes through it. The matrix " +
-				"says which versions coexist, not which hops are supported upgrades, so use " +
-				"`exclude` for releases back-in-time rules or upgrade checklists rule out.",
+				"upgrade order (vCenter, VKS, Supervisor, ESX) passes through it. Hops upstream's " +
+				"upgrade-path data marks not supported (back-in-time blocks) are never taken; " +
+				"each step's `upgrade` says supported, conditional or unpublished. Check " +
+				"unpublished hops against upgrade docs, and use `exclude` for releases an " +
+				"upgrade checklist rules out.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

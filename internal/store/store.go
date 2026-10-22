@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite" // pure-Go driver: no cgo, so the binary stays static
 )
 
-const schemaVersion = "2"
+const schemaVersion = "3"
 
 // Status codes as published by the interop API.
 const (
@@ -24,6 +24,14 @@ const (
 	StatusIncompatible = 2
 	StatusCompatibleNT = 3 // compatible, not tested
 	StatusNotSupported = 4
+)
+
+// Upgrade path status codes as published by the interop API's upgrade-path view. Only 1
+// and 2 have been seen; 3 is what the SPA renders as "supported with conditions".
+const (
+	UpgradeSupported            = 1
+	UpgradeNotSupported         = 2
+	UpgradeSupportedConditional = 3
 )
 
 // Product is one cached product row.
@@ -82,6 +90,17 @@ type Lifecycle struct {
 	EOTGDate  int64
 	Source    string // "productName|description" the row came from
 	FetchedAt int64
+}
+
+// Upgrade is one published upgrade hop within a product, from the interop API's
+// upgrade-path view. Unlike Compat it is directed: FromRelease is the installed release.
+// Cells upstream leaves null are not stored, so a missing row means "unpublished".
+type Upgrade struct {
+	ProductID   int
+	FromRelease int
+	ToRelease   int
+	Status      int
+	Footnotes   string
 }
 
 // DB is an open cache.
@@ -168,6 +187,14 @@ CREATE TABLE IF NOT EXISTS lifecycle(
   fetched_at  INTEGER NOT NULL,
   PRIMARY KEY(product_key, release_key));
 
+CREATE TABLE IF NOT EXISTS upgrades(
+  product_id   INTEGER NOT NULL,
+  from_release INTEGER NOT NULL,
+  to_release   INTEGER NOT NULL,
+  status       INTEGER NOT NULL,
+  footnotes    TEXT,
+  PRIMARY KEY(from_release, to_release));
+
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 
 CREATE INDEX IF NOT EXISTS idx_releases_product ON releases(product_id);
@@ -188,11 +215,12 @@ func (db *DB) migrate() error {
 	if got == schemaVersion {
 		return nil
 	}
-	// Version 2 only added the lifecycle table, which the schema above has just created.
-	// Everything a version 1 cache holds is still valid, and an empty lifecycle table
-	// simply means every release falls back to the matrix flags until the next refresh —
-	// so upgrade in place rather than making people re-fetch 118k edges.
-	if got == "1" {
+	// Version 2 only added the lifecycle table and version 3 only the upgrades table, both
+	// of which the schema above has just created. Everything an older cache holds is still
+	// valid. An empty lifecycle table means every release falls back to the matrix flags,
+	// and an empty upgrades table means every hop reads as unpublished, until the next
+	// refresh — so upgrade in place rather than making people re-fetch 118k edges.
+	if got == "1" || got == "2" {
 		return db.SetMeta("schema_version", schemaVersion)
 	}
 	return fmt.Errorf("cache at %s uses schema version %s, this build expects %s — run `vkstack cache clear`",
@@ -241,7 +269,7 @@ func (db *DB) FetchedAt() (time.Time, error) {
 // Counts returns the number of rows in each populated table, for `cache info`.
 func (db *DB) Counts() (map[string]int, error) {
 	out := map[string]int{}
-	for _, t := range []string{"products", "releases", "compat", "pair_coverage", "lifecycle"} {
+	for _, t := range []string{"products", "releases", "compat", "pair_coverage", "lifecycle", "upgrades"} {
 		var n int
 		if err := db.sql.QueryRow(`SELECT count(*) FROM ` + t).Scan(&n); err != nil {
 			return nil, fmt.Errorf("counting %s: %w", t, err)

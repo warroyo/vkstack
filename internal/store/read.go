@@ -13,6 +13,7 @@ type Snapshot struct {
 	Compat    []Compat
 	Coverage  []PairCoverage
 	Lifecycle []Lifecycle
+	Upgrades  []Upgrade
 	// FetchedAt is when the cache was last completely refreshed, in epoch ms.
 	FetchedAt int64
 }
@@ -105,6 +106,23 @@ func (db *DB) Load() (*Snapshot, error) {
 	}
 	if err := lcRows.Err(); err != nil {
 		return nil, fmt.Errorf("loading lifecycle: %w", err)
+	}
+
+	upRows, err := db.sql.Query(`SELECT product_id, from_release, to_release, status, COALESCE(footnotes,'')
+		FROM upgrades`)
+	if err != nil {
+		return nil, fmt.Errorf("loading upgrade paths: %w", err)
+	}
+	defer upRows.Close()
+	for upRows.Next() {
+		var u Upgrade
+		if err := upRows.Scan(&u.ProductID, &u.FromRelease, &u.ToRelease, &u.Status, &u.Footnotes); err != nil {
+			return nil, fmt.Errorf("scanning upgrade path: %w", err)
+		}
+		s.Upgrades = append(s.Upgrades, u)
+	}
+	if err := upRows.Err(); err != nil {
+		return nil, fmt.Errorf("loading upgrade paths: %w", err)
 	}
 
 	at, err := db.FetchedAt()

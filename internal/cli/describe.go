@@ -188,8 +188,9 @@ func surface() map[string]any {
 					"vkstack path --from vcenter=8.0U3 --from supervisor=v1.28.3+vmware.2-fips.1-vsc0.1.9 " +
 						"--to vcenter=9.1.1.0 --to supervisor=v1.33.13+vmware.1-fips-vsc9.1.1.0",
 				},
-				"note": "A route through valid states is not proof each hop is a supported " +
-					"upgrade; check back-in-time rules and upgrade checklists.",
+				"note": "Hops upstream publishes as not supported are never taken. Steps whose " +
+					"`upgrade` is \"unpublished\" have no upstream upgrade-path data; check them " +
+					"against upgrade checklists.",
 				"exitCodes": map[string]int{"route": ExitOK, "no_route": ExitNoStack},
 			},
 			{

@@ -9,6 +9,7 @@ import (
 
 	"github.com/warroyo/vkstack/internal/graph"
 	"github.com/warroyo/vkstack/internal/model"
+	"github.com/warroyo/vkstack/internal/store"
 )
 
 // `vkstack path` finds the shortest upgrade route between two stacks where every state on
@@ -28,8 +29,10 @@ clusters (VKr) move one Kubernetes minor per step. Guest clusters are constraine
 alone. The ESX 8 with vsc9 Supervisor state is allowed and
 flagged transitional, because the vSphere 8 → 9 upgrade order passes through it.
 
-The matrix says which versions coexist, not which hops are supported upgrades. Use
---exclude for releases a back-in-time rule or an upgrade checklist rules out.
+Hops upstream's upgrade-path view publishes as not supported, such as back-in-time
+blocks, are never taken. Hops it says nothing about (most of Avi, for one) are allowed
+and marked unpublished: check those against upgrade docs, and use --exclude for releases
+an upgrade checklist rules out.
 
 Exits 7 when no route exists, naming the optional product in the way when there is one.`,
 		Example: `  vkstack path \
@@ -169,7 +172,7 @@ func pathJSON(res *graph.PathResult) map[string]any {
 	}
 	steps := make([]map[string]any, 0, len(res.Steps))
 	for i, s := range res.Steps {
-		steps = append(steps, map[string]any{
+		step := map[string]any{
 			"step":         i + 1,
 			"product":      s.Product.Key,
 			"from":         s.From.Raw,
@@ -177,7 +180,12 @@ func pathJSON(res *graph.PathResult) map[string]any {
 			"state":        stateJSON(s.State),
 			"notTested":    pairNames(s.NotTested),
 			"transitional": s.Transitional,
-		})
+			"upgrade":      upgradeWord(s),
+		}
+		if s.Upgrade.Footnotes != "" {
+			step["upgradeNote"] = s.Upgrade.Footnotes
+		}
+		steps = append(steps, step)
 	}
 	return map[string]any{
 		"products":  keys,
@@ -185,9 +193,23 @@ func pathJSON(res *graph.PathResult) map[string]any {
 		"target":    stateJSON(res.Target),
 		"stepCount": len(res.Steps),
 		"steps":     steps,
-		"note": "Every state is valid in the matrix. The matrix does not say whether each hop " +
-			"is a supported upgrade: check back-in-time rules and each product's upgrade " +
-			"checklist, and exclude releases they rule out.",
+		"note": "Every state is valid in the matrix, and no hop is one upstream publishes as " +
+			"not supported. Hops marked \"unpublished\" have no upstream upgrade-path data: " +
+			"check them against each product's upgrade checklist, and exclude releases it " +
+			"rules out.",
+	}
+}
+
+// upgradeWord is a step's upgrade-path verdict: "supported", "conditional" (supported
+// with conditions, see the note) or "unpublished".
+func upgradeWord(s graph.PathStep) string {
+	switch {
+	case !s.UpgradePublished:
+		return "unpublished"
+	case s.Upgrade.Status == store.UpgradeSupportedConditional:
+		return "conditional"
+	default:
+		return "supported"
 	}
 }
 
@@ -198,10 +220,17 @@ func printPath(w io.Writer, res *graph.PathResult) {
 		if s.Transitional {
 			fmt.Fprint(w, "  [transitional: ESX 8 with vsc9 Supervisor]")
 		}
+		if word := upgradeWord(s); word != "supported" {
+			fmt.Fprintf(w, "  [upgrade path %s]", word)
+		}
 		fmt.Fprintln(w)
 		for _, nt := range pairNames(s.NotTested) {
 			fmt.Fprintf(w, "       not tested: %s\n", nt)
 		}
+		if s.Upgrade.Footnotes != "" {
+			fmt.Fprintf(w, "       note: %s\n", s.Upgrade.Footnotes)
+		}
 	}
-	fmt.Fprintln(w, "\nEvery state is valid in the matrix; confirm each hop against upgrade docs.")
+	fmt.Fprintln(w, "\nEvery state is valid in the matrix and no hop is one upstream blocks;")
+	fmt.Fprintln(w, "confirm hops marked unpublished against upgrade docs.")
 }

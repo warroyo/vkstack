@@ -218,3 +218,66 @@ func TestPathRefusesToMoveBackwards(t *testing.T) {
 		t.Fatalf("want backwards, got %+v", fail)
 	}
 }
+
+// withSecondSupervisor129 adds Supervisor v1.29.7 vsc0.1.11 (id 306), pairing exactly like
+// vsc0.1.10 (302). Being the newer build, it is the one the search lands on by default.
+func withSecondSupervisor129(snap *store.Snapshot) *store.Snapshot {
+	snap.Releases = append(snap.Releases, store.Release{ID: 306, ProductID: sup,
+		HybridVersion: "v1.29.7+vmware.1-fips-vsc0.1.11", ReleaseType: "Minor", GADate: 1})
+	for _, c := range snap.Compat {
+		switch {
+		case c.ARelease == 302:
+			snap.Compat = append(snap.Compat, store.Compat{ARelease: 306, BRelease: c.BRelease, Status: c.Status})
+		case c.BRelease == 302:
+			snap.Compat = append(snap.Compat, store.Compat{ARelease: c.ARelease, BRelease: 306, Status: c.Status})
+		}
+	}
+	return snap
+}
+
+func TestPathNeverTakesAHopUpstreamMarksNotSupported(t *testing.T) {
+	snap := withSecondSupervisor129(pathFixture())
+	snap.Upgrades = []store.Upgrade{
+		// The newer 1.29 build is a back-in-time block from 1.28; the older one is fine.
+		{ProductID: sup, FromRelease: 301, ToRelease: 306, Status: store.UpgradeNotSupported,
+			Footnotes: "source version's release date is after the target version's"},
+		{ProductID: sup, FromRelease: 302, ToRelease: 303, Status: store.UpgradeSupported},
+	}
+	g, err := Load(snap, Options{AllVersions: true})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	res, fail := g.Path(pins(g, 102, 301), pins(g, 102, 303), PathOptions{})
+	if fail != nil {
+		t.Fatalf("no path: %v", fail)
+	}
+	got := stepsString(res)
+	want := []string{"supervisor v1.29.7+vmware.1-fips-vsc0.1.10", "supervisor v1.30.10+vmware.1-fips-vsc0.1.12"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("steps = %v, want %v: the blocked hop to vsc0.1.11 must be routed around", got, want)
+	}
+	if res.Steps[0].UpgradePublished {
+		t.Errorf("step 1 (301→302) has no upstream row and must read as unpublished, got %+v", res.Steps[0].Upgrade)
+	}
+	if !res.Steps[1].UpgradePublished || !res.Steps[1].Upgrade.Supported() {
+		t.Errorf("step 2 (302→303) is published as supported, got published=%v %+v",
+			res.Steps[1].UpgradePublished, res.Steps[1].Upgrade)
+	}
+}
+
+func TestPathWithoutUpgradeDataTakesTheNewestBuild(t *testing.T) {
+	g, err := Load(withSecondSupervisor129(pathFixture()), Options{AllVersions: true})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	res, fail := g.Path(pins(g, 102, 301), pins(g, 102, 303), PathOptions{})
+	if fail != nil {
+		t.Fatalf("no path: %v", fail)
+	}
+	// With no upgrade-path rows every hop is unpublished, so nothing is blocked and the
+	// search keeps preferring the newest build in each minor.
+	if got := stepsString(res); got[0] != "supervisor v1.29.7+vmware.1-fips-vsc0.1.11" {
+		t.Fatalf("steps = %v, want the newest 1.29 build first", got)
+	}
+}

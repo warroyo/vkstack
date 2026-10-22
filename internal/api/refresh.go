@@ -22,7 +22,7 @@ func Refresh(ctx context.Context, c *Client, db *store.DB, progress Progress) er
 		progress = func(int, int, string) {}
 	}
 	pairs := model.Pairs()
-	total := 2 + len(pairs)
+	total := 2 + len(pairs) + len(model.Products)
 
 	// This first call is also what discovers the auth key: the client has none until a
 	// request needs one, and a rotation is handled inside the client, not here.
@@ -111,6 +111,17 @@ func Refresh(ctx context.Context, c *Client, db *store.DB, progress Progress) er
 		}
 	}
 
+	step := len(pairs) + 2
+	for _, p := range model.Products {
+		progress(step, total, fmt.Sprintf("fetching %s upgrade paths", p.Label))
+		step++
+		if err := refreshUpgrades(ctx, c, w, p); err != nil {
+			// Like support dates, a failure here must not cost a good matrix refresh. The
+			// product keeps its previous hops, and with none every hop reads as unpublished.
+			progress(step-1, total, fmt.Sprintf("skipping %s upgrade paths: %v", p.Label, err))
+		}
+	}
+
 	progress(total-1, total, "fetching published support dates")
 	if err := refreshLifecycle(ctx, c.lifecycleClient(), w, progress, total); err != nil {
 		// A lifecycle failure must not cost us a good matrix refresh. The previous rows
@@ -122,6 +133,27 @@ func Refresh(ctx context.Context, c *Client, db *store.DB, progress Progress) er
 		return err
 	}
 	progress(total, total, "done")
+	return nil
+}
+
+// refreshUpgrades mirrors one product's upgrade path grid. The product's previous rows are
+// cleared only once the fetch has succeeded.
+func refreshUpgrades(ctx context.Context, c *Client, w *store.Writer, p model.Product) error {
+	edges, err := c.Upgrades(ctx, p.ID)
+	if err != nil {
+		return err
+	}
+	if err := w.ClearUpgrades(p.ID); err != nil {
+		return err
+	}
+	for _, e := range edges {
+		if err := w.PutUpgrade(store.Upgrade{
+			ProductID: p.ID, FromRelease: e.FromRelease, ToRelease: e.ToRelease,
+			Status: e.Status, Footnotes: e.Footnotes,
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

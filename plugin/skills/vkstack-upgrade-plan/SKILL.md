@@ -7,7 +7,7 @@ description: Build a step-by-step upgrade plan for a vSphere / VCF stack (vCente
 
 Turn a current stack and a target into an ordered upgrade path where **every state in between is a valid stack**, backed by the Broadcom interoperability matrix (through the vkstack MCP server) and by Broadcom's upgrade documentation.
 
-The matrix says which versions may *coexist*. It does not say which hops are supported *upgrades*. A good plan needs both: vkstack for coexistence, and release notes and KBs for hop legality and order. Keep the two apart in the output, so a reader can tell which claim rests on which source.
+The compatibility matrix says which versions may *coexist*. Broadcom's upgrade-path data says which hops are supported *upgrades*, but only where it publishes a row, and it says nothing about order across products. vkstack mirrors both: `vkstack_path` never takes a hop upstream marks not supported, and labels each step's `upgrade` as `supported`, `conditional` or `unpublished`. A good plan still needs release notes and KBs for unpublished hops, upgrade checklists and order. Keep the sources apart in the output, so a reader can tell which claim rests on which.
 
 ## Tools
 
@@ -27,7 +27,7 @@ If the MCP server isn't connected, the same operations exist on the `vkstack` CL
 ## Data sources: what to use and what to ignore
 
 - **Use:** vkstack, Broadcom TechDocs release notes, Broadcom KB articles, and the user's own operational knowledge (label it as such).
-- **Ignore the VCF Upgrade Planner and its output.** The interop matrix has taken over that data, including older VKS releases: VKS 3.0.0 is listed, so pin it directly rather than a stand-in. If a user pastes Upgrade Planner output, you can compare against it, but don't take versions or orderings from it. If the matrix lacks a version, say so and check the release notes instead.
+- **Compare against, never build from, the VCF Upgrade Planner.** Broadcom's VCF Upgrade Planner (`vmware.github.io/vcf-upgrade-planner`) reads the same interop data, including the upgrade-path tables. Use it as a cross-check after the plan is built (step 9), not as a source of versions or orderings. If the matrix lacks a version, say so and check the release notes instead. The interop matrix covers older VKS releases too: VKS 3.0.0 is listed, so pin it directly rather than a stand-in.
 
 ## Workflow
 
@@ -73,7 +73,7 @@ Look especially for **bridge releases**: the one build of a product whose window
 
 ### 5. Build the backbone path
 
-If `vkstack_path` is available, call it with the current and target stacks (vCenter, Supervisor, and any optional products) and use its route as the backbone. It returns the shortest sequence of single-component moves where every state is valid, and says so when no route exists.
+If `vkstack_path` is available, call it with the current and target stacks (vCenter, Supervisor, and any optional products) and use its route as the backbone. It returns the shortest sequence of single-component moves where every state is valid and no hop is one upstream blocks, and says so when no route exists. Read each step's `upgrade`: `conditional` carries an `upgradeNote` to quote in the plan, and `unpublished` hops (most Avi hops) must be checked in step 8.
 
 Otherwise, build the backbone by hand from the windows:
 
@@ -107,13 +107,25 @@ An incompatible state is an answer, not a malfunction: read the payload.
 
 Fetch and cite the actual pages; don't rely on memory. What to check, and the traps, are in `references/doc-checks.md`. At minimum:
 
-- **vCenter back-in-time rules.** The target build must be newer than the source. For example, 8.0U3j/k cannot go to 9.1.0.x but can go to 9.1.1.0, while 8.0U3–U3i can go to 9.1.0. If the path needs an intermediate vCenter, make sure the source patch level can reach it, and tell the user not to patch vCenter 8 past that level.
+- **Every `unpublished` hop** from `vkstack_path`. Upstream has no upgrade-path row for it, so its legality rests on the product's upgrade checklist or release notes.
+- **vCenter back-in-time rules.** `vkstack_path` already avoids blocked hops, but say why the route stops where it does, and warn about patching past it. The target build must be newer than the source. For example, 8.0U3j/k cannot go to 9.1.0.x but can go to 9.1.1.0, while 8.0U3–U3i can go to 9.1.0. If the path needs an intermediate vCenter, make sure the source patch level can reach it, and tell the user not to patch vCenter 8 past that level.
 - **The optional product's upgrade checklist** for the target line, which gives the supported source versions. For example, Avi 22.1.4–22.1.7 → 32.1.x is direct. If a direct hop is supported, drop intermediate stops; each one is a maintenance window.
 - **VKS release notes** for each VKS hop's prerequisites.
 - **Known issues** in the target release notes that apply to the hops you chose.
 - **Pre-upgrade blockers** for the target vCenter line. For example, KB 455737 (the VUM database schema check) must pass before any 8.0U3 or 9.0 → 9.1 vCenter hop. Put these in the pre-flight checklist and on the vCenter step they block.
 
-### 9. Write the plan
+### 9. Cross-check against the VCF Upgrade Planner
+
+Fetch the planner's `compat-data.json` (and `k8s-upgrade-matrix.json` for VKr), then check every hop and every state in the plan against it. How, and what each key means, is in `references/upgrade-planner-crosscheck.md`.
+
+- **Hops:** its `<product>_upgrade` tables come from the same upstream upgrade-path data vkstack mirrors, so they should agree. Save the `vkstack path` result as JSON and run `scripts/planner_crosscheck.py` over it. Expect `missing` only on hops vkstack marks `unpublished`. A hop the planner marks `no` with a Broadcom footnote means the vkstack snapshot predates that block, or its upgrade data failed to refresh: run `vkstack refresh`, or re-run `vkstack_path` with that target in `exclude`. Don't predict blocks from version strings. Upstream's back-in-time blocks follow release dates, not vsc build numbers, and have exceptions: v1.28.3 vsc0.1.11 → v1.30.10 vsc0.1.12 is blocked though the build is higher, and v1.29.7 vsc0.1.11 → v1.30.10 vsc0.1.12 is allowed.
+- **Pairs:** a difference from vkstack is a data disagreement. Resolve it from the Broadcom docs; don't change the plan on the planner's word alone.
+- **Avi:** the planner doesn't check Supervisor × Avi, so it can't confirm or contradict Avi constraints. vkstack stays the authority there.
+- **Freshness:** if the planner's `versions` lists name releases the vkstack snapshot lacks, say vkstack is stale and suggest `vkstack refresh`.
+
+Record the result in the internal plan only.
+
+### 10. Write the plan
 
 Default to a Claude Doc when a docs connector is available (otherwise markdown). Offer two versions when the audience includes a customer:
 
@@ -146,4 +158,5 @@ Before handing over:
 - [ ] Each optional-product hop is checked against its own upgrade checklist.
 - [ ] Not-tested pairs are listed with their steps.
 - [ ] Assumptions (stand-in versions, versions missing from the matrix) are stated.
+- [ ] Every hop is checked against the VCF Upgrade Planner's upgrade tables. The cross-check is in the internal plan with its data dates, and every difference is resolved or listed as an open question.
 - [ ] Doc links sit next to the claims they support, and are collected at the end.

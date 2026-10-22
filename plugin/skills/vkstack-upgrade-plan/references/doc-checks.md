@@ -51,4 +51,4 @@ Pattern: each VKS release names a minimum installed VKS for a direct upgrade, an
 
 ## Interop matrix
 
-- https://interopmatrix.broadcom.com: the upstream of vkstack. It also has an upgrade-path view that vkstack does not mirror.
+- https://interopmatrix.broadcom.com: the upstream of vkstack. Its upgrade-path view is mirrored by `vkstack refresh`, and `vkstack_path` never takes a hop it blocks. The VCF Upgrade Planner's `compat-data.json` mirrors the same view for vCenter, ESX, NSX, Supervisor, VKS and Avi, with Broadcom's footnotes on blocked hops. Its vCenter table agrees with the back-in-time table above (spot-checked on the 8.0U3j row, 2026-10-22). See `upgrade-planner-crosscheck.md`.

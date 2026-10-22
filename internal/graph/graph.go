@@ -208,6 +208,19 @@ type Edge struct {
 	Footnotes string
 }
 
+// UpgradeHop is upstream's answer for upgrading directly from one release to another of
+// the same product.
+type UpgradeHop struct {
+	Status    int
+	Footnotes string
+}
+
+// Supported reports whether upstream allows the hop. Status 3 is "supported with
+// conditions", which the footnote spells out.
+func (u UpgradeHop) Supported() bool {
+	return u.Status == store.UpgradeSupported || u.Status == store.UpgradeSupportedConditional
+}
+
 // Compatible reports whether a status counts as a yes. Status 3 is "compatible, not
 // tested" — still a yes. Status 4 ("not supported") is the dominant no in this dataset
 // and must never be read as merely missing.
@@ -221,6 +234,9 @@ type Graph struct {
 	Compat    map[int][]Edge
 	ByProduct map[int][]int // product id -> release ids, ascending by version
 	Coverage  map[[2]int]bool
+	// Upgrades holds published upgrade hops, keyed by {from release, to release}. A hop
+	// missing from the map is unpublished, not blocked.
+	Upgrades  map[[2]int]UpgradeHop
 	FetchedAt int64
 
 	// Excluded counts releases dropped by the version floor, for `cache info`.
@@ -254,6 +270,7 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 		Compat:    make(map[int][]Edge),
 		ByProduct: make(map[int][]int),
 		Coverage:  make(map[[2]int]bool),
+		Upgrades:  make(map[[2]int]UpgradeHop),
 		Excluded:  make(map[int]int),
 		FetchedAt: snap.FetchedAt,
 	}
@@ -322,6 +339,16 @@ func Load(snap *store.Snapshot, opts Options) (*Graph, error) {
 		}
 		g.Compat[a.ID] = append(g.Compat[a.ID], Edge{Peer: b.ID, Status: c.Status, Footnotes: c.Footnotes})
 		g.Compat[b.ID] = append(g.Compat[b.ID], Edge{Peer: a.ID, Status: c.Status, Footnotes: c.Footnotes})
+	}
+
+	// Upgrade hops are kept only between two surviving releases of the same product.
+	for _, u := range snap.Upgrades {
+		a, aOK := g.Releases[u.FromRelease]
+		b, bOK := g.Releases[u.ToRelease]
+		if !aOK || !bOK || a.ProductID != b.ProductID {
+			continue
+		}
+		g.Upgrades[[2]int{a.ID, b.ID}] = UpgradeHop{Status: u.Status, Footnotes: u.Footnotes}
 	}
 
 	// Pass 3: drop products without an explicit floor that cannot reach any surviving
@@ -643,6 +670,13 @@ func (g *Graph) Status(aRelease, bRelease int) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// Upgrade returns upstream's answer for upgrading from one release directly to another,
+// and false when upstream publishes none.
+func (g *Graph) Upgrade(from, to int) (UpgradeHop, bool) {
+	u, ok := g.Upgrades[[2]int{from, to}]
+	return u, ok
 }
 
 func pair(a, b int) [2]int {

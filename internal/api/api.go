@@ -351,3 +351,72 @@ func (c *Client) Matrix(ctx context.Context, columnProduct, rowProduct int) (*Ma
 	}
 	return out, nil
 }
+
+// upgradesRequest is the body the upgrade path endpoint expects. The isHide* flags are
+// sent false for the same reason as the matrix: filtering happens against the cache.
+type upgradesRequest struct {
+	ProductID           int  `json:"product_id"`
+	IsHidePatch         bool `json:"isHidePatch"`
+	IsHideGenSupported  bool `json:"isHideGenSupported"`
+	IsHideTechSupported bool `json:"isHideTechSupported"`
+}
+
+// upgradeRelease is one release inside an upgrade path response. Status is a pointer
+// because upstream sends null for a cell it has no answer for, which is not a "no".
+type upgradeRelease struct {
+	ID        int     `json:"id"`
+	Version   string  `json:"version"`
+	Dummy     bool    `json:"dummy"`
+	Status    *int    `json:"status"`
+	Footnotes *string `json:"footnotes"`
+	// Releases is set only on a source release: the targets it was evaluated against.
+	Releases []upgradeRelease `json:"releases"`
+}
+
+// UpgradeEdge is one published upgrade hop for a single product.
+type UpgradeEdge struct {
+	FromRelease int
+	ToRelease   int
+	Status      int
+	Footnotes   string
+}
+
+// Upgrades fetches the upgrade path grid for one product: which releases each release can
+// be upgraded to directly. This is the interop site's upgrade-path view, and it is the
+// only upstream source for hop legality, such as the back-in-time blocks.
+//
+// Only cells with a status are returned. Upstream sends null for most of the grid
+// (downgrades, skipped minors, pairs nobody evaluated), and reading that as a "no" would
+// turn missing data into a block.
+func (c *Client) Upgrades(ctx context.Context, productID int) ([]UpgradeEdge, error) {
+	resp, err := c.do(ctx, http.MethodPost, "/upgrades", upgradesRequest{ProductID: productID})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var raw struct {
+		UpgradeProducts []upgradeRelease `json:"upgradeProducts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decoding upgrade paths for product %d: %w", productID, err)
+	}
+
+	var out []UpgradeEdge
+	for _, src := range raw.UpgradeProducts {
+		if src.ID == 0 || src.Dummy {
+			continue
+		}
+		for _, dst := range src.Releases {
+			if dst.ID == 0 || dst.Dummy || dst.Status == nil || dst.ID == src.ID {
+				continue
+			}
+			e := UpgradeEdge{FromRelease: src.ID, ToRelease: dst.ID, Status: *dst.Status}
+			if dst.Footnotes != nil {
+				e.Footnotes = *dst.Footnotes
+			}
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}

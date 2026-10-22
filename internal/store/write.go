@@ -17,6 +17,7 @@ type Writer struct {
 	compat       *sql.Stmt
 	pairCoverage *sql.Stmt
 	lifecycle    *sql.Stmt
+	upgrades     *sql.Stmt
 }
 
 // BeginWrite starts a refresh transaction.
@@ -56,6 +57,9 @@ func (db *DB) BeginWrite() (*Writer, error) {
 				eotg_date=excluded.eotg_date,
 				source=excluded.source,
 				fetched_at=excluded.fetched_at`},
+		{&w.upgrades, `INSERT INTO upgrades(product_id, from_release, to_release, status, footnotes) VALUES(?,?,?,?,?)
+			ON CONFLICT(from_release, to_release) DO UPDATE SET
+				product_id=excluded.product_id, status=excluded.status, footnotes=excluded.footnotes`},
 	}
 	for _, s := range stmts {
 		st, err := tx.Prepare(s.sql)
@@ -144,6 +148,25 @@ func (w *Writer) PutLifecycle(l Lifecycle) error {
 func (w *Writer) ClearLifecycle(productKey string) error {
 	if _, err := w.tx.Exec(`DELETE FROM lifecycle WHERE product_key = ?`, productKey); err != nil {
 		return fmt.Errorf("clearing lifecycle for %s: %w", productKey, err)
+	}
+	return nil
+}
+
+// ClearUpgrades drops a product's upgrade hops before they are rewritten. Like lifecycle,
+// upgrade paths are cleared per product rather than by ClearMatrix, so a product whose
+// fetch fails keeps its previous hops instead of silently losing every block.
+func (w *Writer) ClearUpgrades(productID int) error {
+	if _, err := w.tx.Exec(`DELETE FROM upgrades WHERE product_id = ?`, productID); err != nil {
+		return fmt.Errorf("clearing upgrade paths for product %d: %w", productID, err)
+	}
+	return nil
+}
+
+// PutUpgrade upserts one upgrade hop. It is directed, so unlike PutCompat the release ids
+// are stored as given.
+func (w *Writer) PutUpgrade(u Upgrade) error {
+	if _, err := w.upgrades.Exec(u.ProductID, u.FromRelease, u.ToRelease, u.Status, u.Footnotes); err != nil {
+		return fmt.Errorf("upserting upgrade %d→%d: %w", u.FromRelease, u.ToRelease, err)
 	}
 	return nil
 }

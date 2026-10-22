@@ -200,8 +200,11 @@ Supervisor and guest clusters move one Kubernetes minor per step, and guest clus
 constrained by VKS alone. ESX 8 with a vsc9 Supervisor is allowed and
 flagged `transitional`, because the vSphere 8 → 9 upgrade order (vCenter, VKS, Supervisor,
 ESX) passes through it. When no route exists, `blockedBy` names the optional product in the
-way. Pass `exclude` for releases a back-in-time rule or an upgrade checklist rules out: the
-matrix says what coexists, not which hops are supported upgrades.
+way. Hops upstream's upgrade-path data marks not supported, such as back-in-time blocks,
+are never taken. Each step's `upgrade` is `supported`, `conditional` (see `upgradeNote`) or
+`unpublished`. Upstream has no upgrade-path data for unpublished hops (most of Avi, for
+one), so check those against upgrade docs, and pass `exclude` for releases an upgrade
+checklist rules out.
 
 A failed call comes back as a tool result with `isError: true` and the reason in text,
 not as a protocol error — the model should be able to see what went wrong and retry.

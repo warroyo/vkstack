@@ -27,6 +27,7 @@ import (
 //   - The Supervisor and VKr move at most one Kubernetes minor per step. A patch or a
 //     release-train switch at the same minor is also one step.
 //   - The Supervisor never moves from the vsc9 train back to vsc0.
+//   - No hop upstream publishes as not supported (see below).
 //
 // Guest clusters (VKr) are constrained by VKS alone, the pair upstream publishes. VKr is
 // provisioned by VKS, and nothing relates it to the Supervisor's own Kubernetes version.
@@ -37,10 +38,15 @@ import (
 // hosts are still on 8, and that state has to exist. The step is flagged Transitional, and
 // the search keeps such states to the fewest it can.
 //
-// The matrix says nothing about whether a hop is a supported upgrade: back-in-time rules,
-// an optional product's upgrade checklist, known issues. A path is a route through valid
-// states, not a guarantee that each hop is allowed. PathOptions.Exclude is how a caller
-// removes releases it knows cannot be upgraded to.
+// The compatibility matrix says nothing about whether a hop is a supported upgrade. The
+// interop site's upgrade-path view does, for some products: it publishes, per release,
+// which releases it can be upgraded to directly. A hop it marks not supported is never
+// taken. This is where the back-in-time blocks live: Supervisor v1.28.3 vsc0.1.11 cannot
+// go to v1.29.7 vsc0.1.10, though both coexist with the rest of a stack. A hop it says
+// nothing about is allowed and reported as unpublished, because most of the grid is empty
+// (Avi publishes two hops) and reading that as a "no" would leave no routes at all. An
+// optional product's upgrade checklist and known issues are still the caller's to check,
+// and PathOptions.Exclude is how a caller removes releases they rule out.
 
 // PathOptions tunes the search.
 type PathOptions struct {
@@ -63,6 +69,10 @@ type PathStep struct {
 	// Transitional marks the ESX 8 with vsc9 Supervisor state, which the matrix does not
 	// list but the 8 → 9 upgrade order requires.
 	Transitional bool
+	// Upgrade is upstream's answer for this hop. UpgradePublished is false when upstream
+	// says nothing about it, which the caller must then check against upgrade docs.
+	Upgrade          UpgradeHop
+	UpgradePublished bool
 }
 
 // PathResult is a complete route.
@@ -320,6 +330,9 @@ func (g *Graph) searchPath(prods []model.Product, from, to map[int]*Release, opt
 				if p.Key == "supervisor" && supervisorTrain(curRel) == 9 && supervisorTrain(next) == 0 {
 					continue
 				}
+				if u, ok := g.Upgrade(curRel.ID, next.ID); ok && !u.Supported() {
+					continue
+				}
 				ns := cur.state
 				ns[i] = next.ID
 				if done[ns] {
@@ -406,9 +419,11 @@ func (g *Graph) buildPath(prods []model.Product, from, to map[int]*Release, star
 				continue
 			}
 			_, tr, _ := evaluate(b)
+			up, published := g.Upgrade(a[i], b[i])
 			res.Steps = append(res.Steps, PathStep{
 				Product: p, From: g.Releases[a[i]], To: g.Releases[b[i]],
 				State: stateMap(b), NotTested: notTested(b), Transitional: tr,
+				Upgrade: up, UpgradePublished: published,
 			})
 		}
 	}

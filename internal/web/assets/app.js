@@ -865,13 +865,13 @@ function buildMapNode(layer, node, p) {
 function bindMapNode(g, layer, node) {
   g.onclick = (ev) => {
     if (ev.shiftKey) { togglePeekLock(g, layer, node); return; }
-    togglePin(layer.key, node);
+    pinNode(layer.key, node);
   };
   g.onkeydown = (ev) => {
     if (ev.key === "Enter" || ev.key === " ") {
       ev.preventDefault();
       if (ev.shiftKey) togglePeekLock(g, layer, node);
-      else togglePin(layer.key, node);
+      else pinNode(layer.key, node);
     }
   };
   g.onmouseenter = () => { showPeek(g, layer, node); traceNode(node.id); };
@@ -1263,7 +1263,7 @@ function nodeButton(layer, node) {
       // popover that dies the moment the pointer moves does not allow.
       onclick: (ev) => {
         if (ev.shiftKey) { togglePeekLock(ev.currentTarget, layer, node); return; }
-        togglePin(layer.key, node);
+        pinNode(layer.key, node);
       },
       onmouseenter: (ev) => showPeek(ev.currentTarget, layer, node),
       onfocus: (ev) => showPeek(ev.currentTarget, layer, node),
@@ -1333,10 +1333,13 @@ function isRecommended(layerKey, node) {
   return !!chosen && node.releases?.includes(chosen.version);
 }
 
-function togglePin(layerKey, node) {
+// A second click on the pinned node used to unpin it, which blanked the whole map — readers
+// clicking their own selection again to look closer lost the stack they were reading.
+// Clear, Esc and the back button already unpin, so clicking the pin itself does nothing.
+function pinNode(layerKey, node) {
   const version = pinVersionFor(node);
-  const same = state.pin && state.pin.product === layerKey && state.pin.version === version;
-  setPin(same ? null : { product: layerKey, version });
+  if (state.pin && state.pin.product === layerKey && state.pin.version === version) return;
+  setPin({ product: layerKey, version });
 }
 
 // setPin is the single door every selection change goes through — clicks, Esc, Clear,
